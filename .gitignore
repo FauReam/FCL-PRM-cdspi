@@ -1,0 +1,27 @@
+# Experiment artifacts
+experiments/**/results/
+*.pt
+*.pth
+*.ckpt
+
+# Data
+/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Paper
+paper/
