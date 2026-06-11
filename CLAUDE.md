@@ -2,47 +2,51 @@
 
 ## 项目简介
 Federated Continual Process Reward Model (联邦持续过程奖励模型)。
-跨机构联邦学习协同训练 step-level PRM。
+跨机构联邦学习协同训练 step-level PRM。**当前方向：CD-SPI 发散结构诊断框架**（详见 PROJECT_FRAMEWORK.md）：
 
-**当前方向：容量连续谱 + CD-SPI 诊断框架**（详见 PROJECT_FRAMEWORK.md）：
-- 旧方向 1（Anchor-PRM / permutation rebasin）在 RTX 4070 上得出阴性结论，已停止
-- 旧方向 2（vanilla full-FT vs head-only）受 expert panel 评审后重构叙事
-- **v3 核心贡献**：CD-SPI 诊断框架揭示联邦聚合中被忽视的信号结构维度；
-  full-FT 在 dense backbone + FedAvg 受控基线下存在可证明的容量优势（充分性证明，非必要性主张）
+- **核心贡献**：CD-SPI 诊断框架，区分联邦聚合中的噪声型与信号型发散
+- **容量作为实验变量**：head-only / LoRA / partial FT / full FT 仅是操控发散类型的手段
+- 容量叙事（"full FT 更好"）已根据两次 expert panel 结论——**全体专家一致否决作为核心贡献**
 - 设备：NVIDIA GB10，121GB 统一内存，ARM64 CPU
 
 ## Scope boundary（明确声明）
-本文结论限于 **dense backbone + FedAvg 基线**。不主张 full FT 是联邦 PRM 的唯一路径；
-LoRA、AttnRes、MoE、SCAFFOLD 等方法可能提供替代容量路径，属于正交或互补方向。
+本文因果推断限于 **dense backbone (Pythia 系列) + FedAvg 聚合 + 标准异质性设定**。
+不主张 full FT 是联邦 PRM 的唯一路径（必要性主张）。CD-SPI 作为诊断工具存在测量不对称性、
+架构敏感性等已知局限。结论外推至 MoE/SCAFFOLD 等替代路径需独立验证。
 
 ## 模型选择
-- **主实验**: Pythia-2.8B 全参数 FT (~40 GB peak)
-- **辅助 1**: Pythia-1.4B + 容量连续谱 (head-only / LoRA r=8,64,256 / partial-FT / full-FT)
-- **辅助 2**: LLaMA-3.1-8B head-only (~16 GB, cross-architecture validation)
+- **主实验**: Pythia-1.4B 容量连续谱 (head-only / LoRA r=8/64/128/256 / partial-FT / full-FT)
+- **扩展**: Pythia-2.8B full FT（验证 scaling 趋势）
+- **架构消融**: 三种 head 激活函数 (ReLU/GELU/Identity) 验证 CD-SPI 排序一致性
+
+## 实验阶段
+Phase 0（关键路径，2 周）→ Phase 1（控制实验，3 周）→ Phase 2（深度验证，3 周）
+
+详见 PROJECT_FRAMEWORK.md 完整实验规划。
 
 ## 常用命令
 ```bash
-# 阶段 1：集中式锚点（vanilla full-FT）
-python scripts/train_centralized_prm.py --config configs/m2_centralized_full_2.8b.yaml
+# Phase 0-1: 集中式基线 + 对称 CD-SPI
 python scripts/train_centralized_prm.py --config configs/m2_centralized_full_1.4b.yaml
 
-# 阶段 2：联邦容量连续谱实验
-python scripts/run_federated.py --config configs/m3_fedavg_full_2.8b.yaml
-python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml
-python scripts/run_federated.py --config configs/m3_fedavg_head_llama_8b.yaml
-
-# LoRA 容量连续谱（expert panel P0 需求）
+# Phase 0-2: 容量连续谱 M3（核心实验）
+python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_lora_r8_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_lora_r64_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_lora_r256_1.4b.yaml
-python scripts/run_federated.py --config configs/m3_fedavg_partialft_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_partialft_last2_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_partialft_last4_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_partialft_last8_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_partialft_mlp_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml
 
-# AttnRes backbone
-python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b_attnres.yaml
+# Phase 1-1: 架构消融（激活函数）
+python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_relu.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_gelu.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_identity.yaml
 
-# 附加实验：AttnRes backbone（可选，不影响主线）
-python scripts/train_centralized_prm.py --config configs/m2_centralized_full_1.4b_attnres.yaml
-python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b_attnres.yaml
+# Phase 2-4: OOD + 异质性
+python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml --ood
 ```
 
 ## 关键路径
@@ -51,12 +55,13 @@ python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b_attnres.yam
 - 客户端训练：`src/fclprm/federated/client.py`
 - 服务器聚合：`src/fclprm/federated/server.py` / `aggregators.py`
 - 模拟调度：`src/fclprm/federated/simulator.py`
-- 模型定义：`src/fclprm/models/base_wrapper.py` (支持 LoRA/partial-FT/AttnRes)
-- **AttnRes backbone**：`src/fclprm/models/attnres_backbone.py`
+- 模型定义：`src/fclprm/models/base_wrapper.py`（LoRA/partial-FT/AttnRes + 对称化嵌入）
+- **对称化 CD-SPI**：`src/fclprm/models/base_wrapper.py` 中 `get_backbone_embedding()`
 - 配置目录：`configs/`
 - 度量：
-  - `src/fclprm/metrics/cd_spi.py` — CD-SPI 核心
-  - `src/fclprm/metrics/cd_spi_stats.py` — permutation test, noise ablation, function-space divergence
+  - `src/fclprm/metrics/cd_spi.py` — CD-SPI 核心（余弦相似度 + PCA EVR）
+  - `src/fclprm/metrics/cd_spi_stats.py` — 排列检验、噪声注入、函数空间散度
+  - `src/fclprm/metrics/cka.py` — CKA 独立交叉验证
   - `src/fclprm/metrics/ood_eval.py` — OOD cross-domain, label perturbation
 - 数据分区：
   - `src/fclprm/data/heterogeneity.py` — Dirichlet, label shift, mixed patterns
@@ -74,10 +79,11 @@ python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b_attnres.yam
 4. **设备不匹配**：`_eval_per_domain` 需在返回前调 `.cpu()`
 5. **检查点恢复**：崩溃发生在聚合前则不生成该轮检查点
 6. **Opacus DP-SGD**：包覆后 `model._module` 才是原始模型
-7. **[AttnRes] 仅支持 GPTNeoX（Pythia）架构**：`AttnResBackboneModel` 当前仅支持 GPTNeoX-based 模型（`GPTNeoXForCausalLM`、`GPTNeoXModel`）。LLaMA 等其他架构需扩展 `SUPPORTED_ARCHS`。
-8. **[AttnRes] 零初始化必须**：伪查询向量必须初始化为 0（`zero_init=true`），否则训练初期会因非均匀注意力权重导致训练不稳定。不得更改此默认值。
-9. **[AttnRes] torch.compile 时机**：`run_federated.py` 中 `torch.compile` 在 `StepRewardModel` 构造之后（而非 backbone 上单独调用），确保 AttnRes 算子也被编译。
-10. **[AttnRes] checkpoint 兼容性**：AttnRes 模型有额外的 `pseudo_queries` 和 `key_norm` 参数。标准残差模型的 checkpoint 无法加载到 AttnRes 模型上（state_dict key 不匹配）。
+7. **[对称化测量 - 重要]** CD-SPI 必须从 backbone 倒数第二层 hidden state 统一提取（`get_backbone_embedding`），不能用 `get_head_embedding`（不同容量配置的嵌入空间不对等）
+8. **[AttnRes] 仅支持 GPTNeoX（Pythia）架构**：`AttnResBackboneModel` 当前仅支持 GPTNeoX-based 模型
+9. **[AttnRes] 零初始化必须**：伪查询向量必须初始化为 0（`zero_init=true`），不得更改
+10. **[AttnRes] torch.compile 时机**：`run_federated.py` 中 `torch.compile` 在 `StepRewardModel` 构造之后
+11. **[AttnRes] checkpoint 兼容性**：AttnRes 模型的 state_dict key 与标准残差模型不兼容
 
 ## 工作约定
 - 提交信息用英文，遵循 `fix(scope): description` 格式

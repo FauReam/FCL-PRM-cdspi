@@ -58,6 +58,8 @@ class StepRewardModel(nn.Module):
         attnres: Optional[dict] = None,
         lora_config: Optional[dict] = None,
         partial_ft_layers: int = 0,
+        partial_ft_mode: str = "last_n",
+        head_activation: str = "relu",
     ) -> None:
         """Initialize wrapper.
 
@@ -82,12 +84,23 @@ class StepRewardModel(nn.Module):
             partial_ft_layers: Number of final transformer layers to unfreeze.
                 0 means no partial unfreezing. When >0 and freeze_backbone=True,
                 the last N layers are unfrozen while earlier layers stay frozen.
+            partial_ft_mode: Module selection strategy for partial FT:
+                - "last_n": Unfreeze all submodules in the last N layers (default).
+                - "mlp_only": Unfreeze only MLP sublayers in the last N layers.
+                - "attn_only": Unfreeze only attention sublayers in the last N layers.
+                - "all_except_embed": Unfreeze everything except embedding layer
+                  (ignores partial_ft_layers).
+            head_activation: PRM head activation function for architecture ablation.
+                One of "relu" (default), "gelu", "identity". Used in P1-1 control
+                experiment to verify CD-SPI consistency across head architectures.
         """
         super().__init__()
         self.freeze_backbone = freeze_backbone
         self.attnres_config = attnres
         self.lora_config = lora_config
         self.partial_ft_layers = partial_ft_layers
+        self.partial_ft_mode = partial_ft_mode
+        self.head_activation = head_activation
         self._lora_applied = False
 
         # Wrap backbone with AttnRes if enabled
@@ -111,9 +124,9 @@ class StepRewardModel(nn.Module):
         if lora_config is not None:
             self._apply_lora(lora_config)
 
-        # --- Partial FT: unfreeze last N layers ---
+        # --- Partial FT: unfreeze selected layers/modules ---
         if partial_ft_layers > 0:
-            self._apply_partial_ft(partial_ft_layers)
+            self._apply_partial_ft(partial_ft_layers, mode=partial_ft_mode)
 
         # --- Freeze logic ---
         # If LoRA is applied, peft handles freezing non-adapter params.
@@ -126,6 +139,7 @@ class StepRewardModel(nn.Module):
         self.head = PRMHead(
             hidden_dim=backbone.config.hidden_size,
             head_dim=head_dim,
+            activation=head_activation,
         )
 
         _count_trainable(self, "total")
@@ -179,13 +193,33 @@ class StepRewardModel(nn.Module):
             f"target_modules={target_modules}"
         )
 
-    def _apply_partial_ft(self, n_layers: int) -> None:
-        """Unfreeze the last n_layers transformer layers.
+    def _apply_partial_ft(self, n_layers: int, mode: str = "last_n") -> None:
+        """Unfreeze selected transformer layer parameters based on mode.
 
         The target for layer access is the inner HF backbone when AttnRes is
         active, otherwise self.backbone directly.
+
+        Modes:
+          - last_n:          Unfreeze all submodules in the last N layers (default).
+          - mlp_only:        Unfreeze only MLP sublayers in the last N layers.
+          - attn_only:       Unfreeze only attention sublayers in the last N layers.
+          - all_except_embed: Unfreeze everything except embedding layer
+                              (ignores n_layers/sets backbone fully trainable).
         """
         inner = self.backbone.backbone if self.attnres_config is not None else self.backbone
+
+        # Mode: all_except_embed — freeze only embed, unfreeze everything else
+        if mode == "all_except_embed":
+            for param in inner.parameters():
+                param.requires_grad = True
+            for name, param in inner.named_parameters():
+                if "embed" in name:
+                    param.requires_grad = False
+            logger.info(
+                "[StepRewardModel] Partial FT: mode=all_except_embed — "
+                "unfroze all backbone except embeddings"
+            )
+            return
 
         if not hasattr(inner, "layers") and hasattr(inner, "gpt_neox"):
             layers = inner.gpt_neox.layers
@@ -204,13 +238,52 @@ class StepRewardModel(nn.Module):
         n_unfreeze = min(n_layers, total_layers)
         start_idx = total_layers - n_unfreeze
 
-        for i, layer in enumerate(layers):
-            for param in layer.parameters():
-                param.requires_grad = (i >= start_idx)
+        # Mode: last_n — existing behaviour (unfreeze all submodules in selected layers)
+        if mode == "last_n":
+            for i, layer in enumerate(layers):
+                for param in layer.parameters():
+                    param.requires_grad = (i >= start_idx)
+            logger.info(
+                f"[StepRewardModel] Partial FT: mode=last_n, unfroze last "
+                f"{n_unfreeze}/{total_layers} layers"
+            )
+            return
 
-        logger.info(
-            f"[StepRewardModel] Partial FT: unfroze last {n_unfreeze}/{total_layers} layers"
-        )
+        # Modes that require selective unfreezing: first freeze all backbone params,
+        # then selectively unfreeze within the selected layer range.
+        for param in inner.parameters():
+            param.requires_grad = False
+
+        if mode == "mlp_only":
+            unfrozen = 0
+            for i in range(start_idx, total_layers):
+                for name, param in layers[i].named_parameters():
+                    if "mlp" in name:
+                        param.requires_grad = True
+                        unfrozen += 1
+            logger.info(
+                f"[StepRewardModel] Partial FT: mode=mlp_only, unfroze last "
+                f"{n_unfreeze}/{total_layers} layers ({unfrozen} MLP params)"
+            )
+        elif mode == "attn_only":
+            unfrozen = 0
+            for i in range(start_idx, total_layers):
+                for name, param in layers[i].named_parameters():
+                    if "attention" in name:
+                        param.requires_grad = True
+                        unfrozen += 1
+            logger.info(
+                f"[StepRewardModel] Partial FT: mode=attn_only, unfroze last "
+                f"{n_unfreeze}/{total_layers} layers ({unfrozen} attn params)"
+            )
+        else:
+            logger.warning(
+                f"[StepRewardModel] Unknown partial_ft_mode='{mode}'; "
+                f"falling back to last_n behaviour"
+            )
+            for i, layer in enumerate(layers):
+                for param in layer.parameters():
+                    param.requires_grad = (i >= start_idx)
 
     @staticmethod
     def _last_non_pad_hidden(
@@ -248,7 +321,16 @@ class StepRewardModel(nn.Module):
     ) -> torch.Tensor:
         """Extract step embedding for CD-SPI computation.
 
-        Returns the hidden state at the last non-PAD token position.
+        Returns the hidden state at the last non-PAD token position
+        from the backbone's FINAL layer.
+
+        Note: This embedding comes from the backbone output (after all transformer
+        layers). For head-only configs, backbone is frozen + identical across
+        clients, so this will always yield CD-SPI ~ 0. For full FT, backbone
+        differs across clients so CD-SPI > 0 is possible.
+
+        For symmetrical measurement across configs, use get_backbone_embedding()
+        instead, which extracts from the penultimate layer.
 
         Args:
             input_ids: Token IDs of shape (B, L).
@@ -260,6 +342,36 @@ class StepRewardModel(nn.Module):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
         return self._last_non_pad_hidden(outputs.last_hidden_state, attention_mask)
+
+    def get_backbone_embedding(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Extract embedding from backbone's SECOND-TO-LAST layer.
+
+        This enables symmetrical CD-SPI measurement across head-only and full-FT
+        configurations: both use the same extraction point (backbone penultimate
+        layer hidden state), avoiding the embedding-space mismatch that occurs
+        when using get_head_embedding() (which goes through randomly initialized
+        head weights for head-only vs. trained head+backbone for full FT).
+
+        Implementation uses output_hidden_states=True and takes hidden_states[-2],
+        which works across all HuggingFace model architectures without requiring
+        architecture-specific layer hooks.
+
+        Returns:
+            Penultimate-layer hidden states of shape (B, D) at last non-PAD position.
+        """
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            outputs = self.backbone(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
+        # hidden_states is a tuple of (embed, layer1, ..., layerN)
+        # hidden_states[-1] is the final layer output (= last_hidden_state)
+        # hidden_states[-2] is the penultimate layer
+        penultimate = outputs.hidden_states[-2]
+        return self._last_non_pad_hidden(penultimate, attention_mask)
 
     def get_head_embedding(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor

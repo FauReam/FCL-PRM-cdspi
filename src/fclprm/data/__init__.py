@@ -8,6 +8,7 @@ from fclprm.data.heterogeneity import (
 )
 from fclprm.data.med_loader import MedPRMBenchLoader
 from fclprm.data.prm800k import PRM800KLoader
+from fclprm.data.processbench_loader import ProcessBenchAccuracy
 from fclprm.data.utils import collate_step_batch, split_cot_into_steps
 from fclprm.data.versa_loader import VersaPRMLoader
 
@@ -15,6 +16,7 @@ __all__ = [
     "PRM800KLoader",
     "VersaPRMLoader",
     "MedPRMBenchLoader",
+    "ProcessBenchAccuracy",
     "split_cot_into_steps",
     "collate_step_batch",
     "dirichlet_partition",

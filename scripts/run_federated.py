@@ -11,6 +11,7 @@ logging.log_dir so you do not need shell pipes like Tee-Object.
 
 import argparse
 import random
+import os
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -251,13 +252,20 @@ def main() -> None:
     attnres_config = config.get("model.attnres", None)
     lora_config = config.get("model.lora", None)
     partial_ft_layers = config.get("model.partial_ft_layers", 0)
+    partial_ft_mode = config.get("model.partial_ft_mode", "last_n")
+    head_activation = config.get("model.head_activation", "relu")
 
     if attnres_config is not None:
         print(f"[INFO] Block AttnRes enabled: {attnres_config.get('num_blocks', 8)} blocks")
     if lora_config is not None:
         print(f"[INFO] LoRA enabled: r={lora_config.get('r', 8)}")
     if partial_ft_layers > 0:
-        print(f"[INFO] Partial FT: last {partial_ft_layers} layers unfrozen")
+        print(f"[INFO] Partial FT: mode={partial_ft_mode}, "
+              f"last {partial_ft_layers} layers unfrozen")
+    if head_activation != "relu":
+        print(f"[INFO] Head activation: {head_activation} (architecture ablation)")
+    else:
+        print(f"[INFO] Head activation: relu (default)")
 
     with tqdm(total=1, desc="Building global model", leave=False) as pbar:
         global_model = StepRewardModel(
@@ -267,28 +275,35 @@ def main() -> None:
             attnres=attnres_config,
             lora_config=lora_config,
             partial_ft_layers=partial_ft_layers,
+            partial_ft_mode=partial_ft_mode,
+            head_activation=head_activation,
         )
         pbar.update(1)
 
-    # torch.compile speeds up forward passes.
-    # When AttnRes is enabled, compile the entire model after AttnRes wrapping.
-    if device == "cuda":
+    # torch.compile speeds up forward passes on x86-64 + CUDA.
+    # On ARM64 (NVIDIA GB10) Triton cannot compile its CUDA utils.
+    is_arm64 = hasattr(os, "uname") and os.uname().machine in ("aarch64", "arm64")
+    if device == "cuda" and hasattr(torch, "compile") and not is_arm64:
         compile_mode = "reduce-overhead"
         global_model = torch.compile(global_model, mode=compile_mode)
         print(f"[INFO] model compiled with torch.compile ({compile_mode})")
+    elif device == "cuda" and is_arm64:
+        print("[INFO] Skipping torch.compile (ARM64, Triton unavailable).")
 
     # Human-readable training mode summary
     parts = []
     if lora_config is not None:
         parts.append(f"LoRA(r={lora_config.get('r', 8)})")
     elif partial_ft_layers > 0:
-        parts.append(f"partial-FT(last {partial_ft_layers})")
+        parts.append(f"partial-FT({partial_ft_mode}, last {partial_ft_layers})")
     elif freeze_backbone:
         parts.append("head-only")
     else:
         parts.append("full-parameter")
     if attnres_config is not None:
         parts.append("AttnRes")
+    if head_activation != "relu":
+        parts.append(f"head_act={head_activation}")
     mode = " + ".join(parts)
     print(f"[INFO] Training mode: {mode} ({load_dtype})")
 
@@ -490,6 +505,9 @@ def main() -> None:
     eval_label_noise = config.get("evaluation.label_noise.enabled", False)
     label_noise_ratios = config.get("evaluation.label_noise.ratios", [0.0, 0.1, 0.2])
 
+    # Symmetrical CD-SPI (P0* control experiment)
+    compute_symmetrical_cd_spi = config.get("evaluation.symmetrical_cd_spi", False)
+
     simulator = FederatedSimulator(
         num_clients=num_clients,
         num_rounds=config.get("federated.num_rounds", 50),
@@ -510,6 +528,7 @@ def main() -> None:
         ood_domains=ood_domains,
         eval_label_noise=eval_label_noise,
         label_noise_ratios=label_noise_ratios,
+        compute_symmetrical_cd_spi=compute_symmetrical_cd_spi,
     )
 
     save_every = config.get("logging.save_every", 10)
@@ -580,6 +599,8 @@ def main() -> None:
             metrics["per_domain_mse"] = record["per_domain_mse"]
         if "cd_spi" in record:
             metrics["cd_spi"] = record["cd_spi"]
+        if "cd_spi_sym" in record:
+            metrics["cd_spi_sym"] = record["cd_spi_sym"]
         logger.log(
             milestone=config.get("experiment.milestone"),
             config_hash=config.hash(),
@@ -596,6 +617,8 @@ def main() -> None:
         final_metrics["per_domain_mse"] = final_record["per_domain_mse"]
     if "cd_spi" in final_record:
         final_metrics["cd_spi"] = final_record["cd_spi"]
+    if "cd_spi_sym" in final_record:
+        final_metrics["cd_spi_sym"] = final_record["cd_spi_sym"]
     logger.log(
         milestone=config.get("experiment.milestone"),
         config_hash=config.hash(),

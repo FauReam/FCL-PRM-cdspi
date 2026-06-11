@@ -1,149 +1,190 @@
-# FCL-PRM：联邦全参数 PRM 微调 —— 项目框架
+# FCL-PRM：CD-SPI 发散结构诊断框架 —— 项目框架
 
-> 创建日期：2026-06-11
-> 旧方向（Anchor-PRM / permutation rebasin）在 RTX 4070 上完成 M2-M4 实验，核心创新经诊断无效。当前转向联邦全参数 PRM 微调路线，利用本设备（NVIDIA GB10，121GB 统一内存）的硬件优势。
+> **更新**：2026-06-11 · 基于两次 Adversarial Panel 结论重构
+> **方向迁移**：从「容量叙事」（full FT vs head-only）→「CD-SPI 噪声/结构化发散诊断框架」
 
 ---
 
 ## 一、核心叙事
 
-> **首次系统性研究联邦场景下 step-level PRM 的全参数微调，证明 head-only 训练存在根本性容量瓶颈，而全参数微调在统一内存架构上可以首次实现 centralized-equivalent 性能。**
+> 本文提出 **CD-SPI（Client Divergence Signal-Noise Partition Index）诊断框架**——一个结构化的两阶段统计诊断协议。
+>
+> **核心发现**（待实验验证）：在 dense backbone + FedAvg 基线下，低容量配置（head-only / LoRA r<256）的跨客户端参数差异本质上是**噪声**（不可与随机排列区分），而全参数 FT 产生的参数差异具有**结构化信号**（统计显著且与聚合性能相关）。
+>
+> **本文第一贡献是 CD-SPI 诊断框架本身**——它从发散类型的维度（而非发散幅度）揭示了一个被所有相关工作（CFL 2020, FedCDD 2025, OvA-LP 等）忽略的信号结构视角。容量（head-only / LoRA / full FT）仅作为**实验变量**，而非核心发现。
 
-### 关键 Insight
+### 与旧叙事的区别
 
-M2 centralized 实验中，head-only PRM 已达 99.7% val_accuracy——任务太简单了，256-dim head 已足够好。这意味着：
-
-1. **联邦场景下 head-only 没有足够的参数容量来产生有意义的跨客户端差异** → FedAvg 没有劣化空间，对齐也没有改善空间
-2. **全参数微调给模型足够的容量来学习领域特异性** → 跨客户端 divergence 上升，聚合才有意义
-3. **当前硬件（GB10 121GB 统一内存）是第一个能让 Pythia-2.8B 全参数联邦训练跑完的消费级设备**
-
----
-
-## 二、模型选择
-
-| 角色 | 模型 | 训练方式 | 峰值内存 | 预估时间 |
-|------|------|---------|---------|---------|
-| **🔴 主实验** | **Pythia-2.8B** | **全参数 FT** | ~40 GB | ~7-8 天 |
-| **🔵 辅助 1** | **Pythia-1.4B** | **全参数 FT** | ~21 GB | ~3-4 天 |
-| **🟢 辅助 2** | **LLaMA-3.1-8B** | **head-only** | ~16 GB | ~1 天 |
-
-**选型逻辑：**
-- Pythia-2.8B 全参数 FT 在 GB10 上内存充裕（40GB/121GB），训练时间可控（~1 周）
-- Pythia-1.4B 同架构小规模，形成 1.4B→2.8B scaling 趋势线
-- LLaMA-3.1-8B head-only 验证跨架构泛化（LoRA 支持待扩展）
+| 维度 | 旧叙事（已废弃） | 新叙事（当前） |
+|:---|---|:---|
+| **第一贡献** | full FT 的性能优势 | **CD-SPI 诊断框架**（噪声 vs 结构化发散） |
+| **容量定位** | 核心发现 | **实验变量**，用于操控发散类型 |
+| **核心问题** | "full FT 是否更好？" | "发散何时是噪声、何时是结构？这对聚合意味着什么？" |
+| **惊讶元素** | 直觉性（容量越大越好） | 反直觉潜力（发散类型比容量大小更根本地决定聚合有效性） |
+| **CD-SPI** | 验证工具 | **主要贡献**（虽算子非新，但分析维度新） |
 
 ---
 
-## 三、实验规划
+## 二、理论框架：CD-SPI 诊断协议
 
-### 阶段 1：集中式锚点（新 M2）
-
-在 centralized 数据上建立全参数微调的上限：
-
-| 实验 | 配置 | 目的 |
-|------|------|------|
-| M2-full-2.8B | `m2_centralized_full_2.8b.yaml` | **主锚点**：全参数 FT 的 centralized upper bound |
-| M2-full-1.4B | `m2_centralized_full_1.4b.yaml` | 规模对比，形成 1.4B→2.8B 趋势线 |
-| M3-fedavg-head-LLaMA-8B | `m3_fedavg_head_llama_8b.yaml` | head-only 限制是否跨架构成立？ |
-
-### 阶段 2：联邦全参数微调（新 M3）
-
-核心对比实验：
-
-| 实验 | 配置 | 核心问题 |
-|------|------|---------|
-| M3-fedavg-full-2.8B | `m3_fedavg_full_2.8b.yaml` | 全参数 FedAvg 是否接近 centralized 水平？ |
-| M3-fedavg-full-1.4B | `m3_fedavg_full_1.4b.yaml` | 小模型下趋势是否一致？ |
-
-### 阶段 3：扩展与诊断
-
-基于阶段 1-2 的结果：
-- CD-SPI 对比（full vs head）：全参数训练下跨客户端差异是否显著增大？
-- Partial FT 扫描：最后 N 层 vs full FT 的 Pareto frontier
-- 通信效率：梯度压缩对全参数联邦的影响
-
-### 附加实验：AttnRes backbone（可选，2026-06 新增）
-
-**引用**：[Attention Residuals](https://arxiv.org/abs/2603.15031) (Kimi Team, arXiv Mar 2026)
-
-AttnRes 将标准残差连接的固定累加替换为深度维度的 softmax 注意力，在 LLM 预训练中表现出 1.25× compute advantage。它与本项目核心论点完全正交——如果有效，可作为论文的额外卖点；如果无效，不影响主线结论。
-
-| 实验 | 配置 | 目的 |
-|------|------|------|
-| M2-AttnRes-1.4B | `m2_centralized_full_1.4b_attnres.yaml` | AttnRes backbone 在 centralized PRM 上的效果 |
-| M3-AttnRes-1.4B | `m3_fedavg_full_1.4b_attnres.yaml` | AttnRes 是否能减少联邦客户端漂移 |
-
----
-
-## 四、代码架构
+### 2.1 CD-SPI 定义
 
 ```
-FCL-PRM-fullft/
-├── PROJECT_FRAMEWORK.md     ← 本文
-├── CLAUDE.md                ← 项目上下文
-├── README.md                ← 简短介绍
-│
-├── configs/                 ← 实验配置（YAML）
-│   ├── m2_centralized_full_1.4b.yaml              ← M2 辅助锚点
-│   ├── m2_centralized_full_2.8b.yaml              ← M2 主锚点
-│   ├── m2_centralized_full_1.4b_attnres.yaml      ← M2 + AttnRes（可选）
-│   ├── m3_fedavg_full_1.4b.yaml                   ← M3 辅助
-│   ├── m3_fedavg_full_1.4b_attnres.yaml           ← M3 + AttnRes（可选）
-│   ├── m3_fedavg_full_2.8b.yaml                   ← M3 主实验
-│   └── m3_fedavg_head_llama_8b.yaml               ← 跨架构验证
-│
-├── src/fclprm/
-│   ├── models/
-│   │   ├── base_wrapper.py    ← StepRewardModel（核心模型包装器）
-│   │   ├── prm_head.py        ← PRMHead
-│   │   ├── attnres_backbone.py ← Block AttnRes backbone（可选模块）
-│   │   └── checkpoint.py      ← 检查点管理
-│   ├── metrics/
-│   │   └── cd_spi.py          ← 跨客户端散度度量
-│   ├── federated/
-│   │   ├── client.py          ← FederatedClient
-│   │   ├── server.py          ← FederatedServer
-│   │   ├── simulator.py       ← 单机多客户端调度
-│   │   ├── aggregators.py     ← 聚合策略（FedAvg / Anchor-PRM / 鲁棒）
-│   │   └── dp.py              ← 差分隐私
-│   ├── data/                  ← 数据加载（PRM800K, VersaPRM, Medical）
-│   └── utils/                 ← 工具函数
-│
-├── scripts/
-│   ├── run_federated.py          ← 联邦模拟主入口
-│   ├── train_centralized_prm.py  ← 集中式训练
-│   └── prepare_versaprm.py       ← 数据准备
-│
-├── experiments/                  ← 实验输出
-├── tests/
-└── docs/
+CD-SPI(s) = 1 - mean_{i,j} cos(h_i(s), h_j(s))
+
+其中 h_i(s) 是 client i 对 step s 在 backbone 倒数第二层的 hidden state
 ```
 
+CD-SPI 不是新的相似度度量。余弦相似度在 FL 中已被广泛使用：
+- **CFL (2020)**：使用成对余弦相似度分离定理做客户端聚类
+- **FedCDD (ICLR 2025)**：使用余弦相似度矩阵诊断 FedLLM 发散
+
+**CD-SPI 的新颖性在于分析框架**：前人用余弦相似度做**聚类**或报告**发散程度**，本文首次将其系统化为**区分发散类型（噪声 vs 结构化）的诊断协议**，并为发散类型与聚合有效性之间的因果关系提供系统的统计验证方案。
+
+### 2.2 两阶段诊断协议
+
+**阶段 1 — 排列检验（Permutation Test）**
+- H0：观测到的 CD-SPI 与随机分配嵌入一致
+- 三层递进 null distribution：
+  - (a) 基准层：客户端标签置换
+  - (b) 中间层：容量匹配的独立训练基线
+  - (c) 最强层：随机特征映射替换
+- 效应量为主：Cohen's d，p 值为辅
+
+**阶段 2 — 主成分解释方差比（PCA EVR）**
+- 对嵌入矩阵做 PCA，计算第一主成分的解释方差比
+- EVR > 0.6 → 发散具有结构化（低维流形）
+- EVR < 0.4 → 发散近噪声（高维球面）
+- 与排列检验结果交叉验证
+
+### 2.3 独立交叉验证
+
+CD-SPI 作为主要诊断工具，其结论必须被至少一个独立指标重申：
+
+| 指标 | 测量空间 | 与 CD-SPI 的互补性 |
+|:---|:---|:---|
+| **CKA** | 特征空间（Centered Kernel Alignment） | 对非线性变换鲁棒，不受测量不对称性影响 |
+| **JS 散度** | 输出空间（reward 分布） | 函数空间验证，与参数空间正交 |
+| **余弦/JS 对比** | 参数 vs 函数空间 | 分辨"语义发散"与"过拟合噪声" |
+
 ---
 
-## 五、硬件护城河
+## 三、核心断言框架
 
-本设备（NVIDIA GB10）是唯一能在消费级 GPU 上运行以下实验的设备：
+### 3.1 实验性假设（H1-H4）
 
-| 实验配置 | GB10 (121GB) | 4090 (24GB) | A100 (80GB) |
-|---------|-------------|-------------|-------------|
-| Pythia-1.4B full FT | ✅ 21GB | ⚠️ 临界 | ✅ |
-| Pythia-1.4B + AttnRes | ✅ 21GB + ~2MB | ⚠️ 临界 | ✅ |
-| Pythia-2.8B full FT | ✅ 40GB | ❌ | ✅ |
-| Pythia-2.8B full FT 联邦 | ✅ 串行 40GB | ❌ | ⚠️ 需共享 |
-| LLaMA-3.1-8B head-only | ✅ 16GB | ✅ | ✅ |
+| 假说 | 描述 | 验证方式 | 优先级 |
+|:---:|---|:---:|:---:|
+| **H1** | 低容量配置的跨客户端差异不可与噪声区分 | 排列检验 p>0.05 + EVR<0.4 | P0 |
+| **H2** | 全参数 FT 呈现统计显著的结构化模式 | 排列检验 p<0.05 + EVR>0.6 + 性能正相关 | P0 |
+| **H3** | 存在容量转变阈值（LoRA rank 精细网格扫描） | 发散类型突变点的 rank 定位 | P1 |
+| **H4** | 发散结构化程度与聚合性能有因果关系 | CD-SPI 正则化干预实验 | P2 |
 
-**论文地位**："To our knowledge, this is the first study to demonstrate full-parameter federated fine-tuning of step-level reward models on a consumer-grade GPU, enabled by the unified memory architecture of NVIDIA Grace Blackwell."
+### 3.2 证伪条件（F1-F5）
+
+| 条件 | 描述 | 触发行动 |
+|:---:|---|:---:|
+| **F1** | head 维度 1024 显示结构化模式 | 修正 H1，增容后 head-only 可能有结构 |
+| **F2** | LoRA(r=64) 达 full FT 95%+ 且 CD-SPI 为噪声 | H2 被证伪 → Plan B |
+| **F3** | 仅定量差异无定性差异 | 二分法→连续谱叙事，降级论文贡献 |
+| **F4** | CKA/JS 与 CD-SPI 不一致 | 放弃 CD-SPI 作为主要证据 |
+| **F5** | 集中式差距 ≤ 2% | 联邦特异性 claim 不成立 |
 
 ---
 
-## 六、关键假设（需阶段 1 验证）
+## 四、实验规划
 
-| 假设 | 验证实验 | 如不成立的影响 |
-|------|---------|--------------|
-| **H1: 全参数 FT 在 centralized 上显著优于 head-only** | M2-full vs 旧 M2 (99.7%) | 核心假设错误，项目终止 |
-| **H2: 联邦全参数 FT 比 head-only 更接近 centralized** | M3-full vs M2-full | 论文改为"挑战分析" |
-| **H3: 全参数 FT 产生更大跨客户端差异 (CD-SPI)** | full vs head CD-SPI 对比 | 全参数不需要特殊聚合 |
-| **H4: 趋势在 1.4B→2.8B 上一致** | 两组实验对比 | 规模不可扩展 |
-| H5 (可选): AttnRes 在 centralized PRM 上优于标准残差 | M2-full vs M2-AttnRes | 不影响主线结论 |
-| H6 (可选): AttnRes 降低联邦客户端漂移 | M3 vs M3-AttnRes (CD-SPI) | 不影响主线结论 |
+### Phase 0 — 关键路径（2 周，决定论文生死）
+
+| # | 实验 | 配置 | 关键输出 |
+|:---:|---|:---:|:---:|
+| P0-1 | 集中式基线 + 对称 CD-SPI | M2 centralized full FT 1.4B | 天花板验证 + 对称/非对称 CD-SPI 对比 |
+| P0-2 | 容量连续谱 | LoRA r=8/64/128/256 + partial FT + head-only + full FT | 容量-发散-性能三元关系散点图 |
+| P0-3 | 训练前 CD-SPI 基线 | 第 0 轮测量 | 控制初始化混淆 |
+
+**终止锚点 P0 完成时判断：**
+- 若 LoRA(r=64) 达 full FT 95%+ → F2 触发的可能性高，准备 Plan B
+- 若集中式 head-only 与 full FT 差距 ≤ 2% → F5 触发
+- 若全部正常 → 进入 Phase 1
+
+### Phase 1 — 控制实验（3 周，验证结论鲁棒性）
+
+| # | 实验 | 配置 | 关键输出 |
+|:---:|---|:---:|:---:|
+| P1-1 | 架构消融 | ReLU/GELU/Identity head | CD-SPI 排序一致性 |
+| P1-2 | 三层排列检验 | 三层 null distribution | H1/H2 统计显著性 |
+| P1-3 | CKA 交叉验证 | 全部容量配置 | 独立指标验证矩阵 |
+| P1-4 | 合成数据校准 | 已知 ground truth 数据 | CD-SPI 精确率+召回率 |
+
+### Phase 2 — 深度验证（3 周，论文深度）
+
+| # | 实验 | 关键方法 |
+|:---:|---|:---:|
+| P2-1 | 散度指向性区分 | CD-SPI vs Wasserstein 距离对比 |
+| P2-2 | 独立聚合指标 | FedDYN drift / SCAFFOLD 控制变分 |
+| P2-3 | 反直觉条件测试 | 极端异质性下低容量结构化 vs 高容量噪声 |
+| P2-4 | OOD + 异质性消融 | 跨域 OOD + Dirichlet/label_shift/mixed |
+| P2-5 | CD-SPI 理论形式化 | 有界性定理 + 尺度不变性 + 收敛率联系 |
+
+### 实验配置总览
+
+| 配置名 | 模型类型 | 容量等级 | 阶段 |
+|:---|---|---|:---:|
+| `m2_centralized_full_1.4b` | full FT（集中式锚点） | 最高 | P0 |
+| `m3_fedavg_head_1.4b` | head-only（256-dim MLP） | 最低 | P0 |
+| `m3_fedavg_lora_r8_1.4b` | LoRA(r=8) | 低 | P0 |
+| `m3_fedavg_lora_r64_1.4b` | LoRA(r=64) | 中低 | P0 |
+| `m3_fedavg_lora_r128_1.4b` | LoRA(r=128) | 中 | P1 |
+| `m3_fedavg_lora_r256_1.4b` | LoRA(r=256) | 中高 | P0 |
+| `m3_fedavg_partialft_last2_1.4b` | partial FT（last 2） | 中高 | P0 |
+| `m3_fedavg_partialft_last4_1.4b` | partial FT（last 4） | 高 | P0 |
+| `m3_fedavg_partialft_last8_1.4b` | partial FT（last 8） | 高 | P0 |
+| `m3_fedavg_partialft_mlp_1.4b` | partial FT（MLP only） | 中 | P1 |
+| `m3_fedavg_partialft_attn_1.4b` | partial FT（Attn only） | 中 | P1 |
+| `m3_fedavg_full_1.4b` | full FT | 最高 | P0 |
+| `m3_fedavg_head_1.4b_relu` | head-only ReLU | 最低 | P1 |
+| `m3_fedavg_head_1.4b_gelu` | head-only GELU | 最低 | P1 |
+| `m3_fedavg_head_1.4b_identity` | head-only Identity | 最低 | P1 |
+
+---
+
+## 五、方法与架构
+
+### 5.1 对称化测量（P0* 控制实验）
+
+**问题**：当前 `_eval_cd_spi` 使用 `get_head_embedding()`，对 head-only 提取的是 head 层特征（含随机初始化权重），对 full FT 提取的是 backbone + head 的全参数特征。两种配置的**嵌入空间不对等**。
+
+**修复**：新增 `get_backbone_embedding()`，从 backbone 倒数第二层 transformer 层后统一提取 hidden state。强制所有 CD-SPI 测量使用对称化嵌入。同时报告对称和非对称两种测量结果，供读者判断差异来源。
+
+### 5.2 CD-SPI = permutation test + PCA EVR 双重标准
+
+**不再使用原始 CD-SPI 作为评分指标**。改为两阶段诊断：
+
+1. **排列检验**：计算观测 CD-SPI 在 null distribution 中的位置
+2. **PCA EVR**：主成分解释方差比，补充发散的"结构维度"信息
+
+### 5.3 架构无关性验证
+
+三种 head 激活函数（ReLU, GELU, Identity），验证 CD-SPI 对 head 架构不敏感。
+
+---
+
+## 六、局限性声明
+
+本文因果推断限于 **dense backbone (Pythia 系列) + FedAvg 聚合 + 标准异质性设定**。以下外推性需独立验证：
+
+1. 非 FedAvg 聚合方法（FedProx, SCAFFOLD, FedDYN）
+2. 不同模型架构（LLaMA, Qwen, Mistral）
+3. 极端异质性（非 IID 程度超出实验设定）
+4. PM（policy model）而非 PRM 场景
+
+CD-SPI 作为诊断工具，其本身存在**测量不对称性、架构敏感性等已知局限**（详见本文方法论章节）。所有结论应结合交叉验证指标综合解读。
+
+---
+
+## 七、投稿策略
+
+| 目标 | 期限 | 可行性 | 条件 |
+|:---|---|:---:|:---|
+| ICLR 2027 | 预计 2026 年 10 月 | 🟢 最现实 | 4 个月窗口：P0(2周)→P1(3周)→P2(3周)→论文(4周) |
+| NeurIPS 2026 Workshop | 2026 年 7-8 月 | 🟡 可能 | 作为 mid-term checkpoint 获取反馈 |

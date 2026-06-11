@@ -1,0 +1,57 @@
+# M3-PartialFT(mlp): FedAvg partial-FT (MLP-only, last 8 layers) — Pythia-1.4B
+# Unfreezes only MLP sublayers (dense_h_to_4h, dense_4h_to_h) in the last 8 layers.
+# Tests whether MLP capacity alone drives the full-FT advantage over head-only.
+# If MLP-only achieves most of full-FT's benefit, the bottleneck is in
+# feed-forward transformation capacity rather than attention mixing.
+# P1-5: MoE-style partial FT sweep — module-type dimension.
+
+experiment:
+  name: "m3_fedavg_partialft_mlp_1.4b"
+  milestone: "M3-partial"
+  description: "FedAvg partial-FT (MLP-only, last 8 layers): Pythia-1.4B, 4 clients, 25 rounds"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  hidden_dim: 2048
+  num_layers: 24
+  freeze_backbone: true
+  prm_head_dim: 256
+  partial_ft_layers: 8
+  partial_ft_mode: "mlp_only"
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 5000
+  max_length: 256
+
+federated:
+  num_clients: 4
+  num_rounds: 25
+  local_epochs: 1
+  local_batch_size: 4
+  local_learning_rate: 5.0e-6
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 5
+
+evaluation:
+  eval_every: 1
+  eval_split: "val"
+  compute_cd_spi: true
+
+logging:
+  log_dir: "./experiments/M3_partialft_mlp_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M3_partialft_mlp_1.4b/results/checkpoints"
+  save_every: 5
+
+hardware:
+  device: "cuda"
+  num_workers: 0

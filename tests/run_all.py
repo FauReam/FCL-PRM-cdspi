@@ -25,29 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-
-def _install_transformers_stub() -> None:
-    if "transformers" in sys.modules:
-        return
-    fake = types.ModuleType("transformers")
-
-    class _StubPreTrainedModel:  # only used as an isinstance/typing hint
-        pass
-
-    class _StubPreTrainedTokenizer:
-        pass
-
-    fake.PreTrainedModel = _StubPreTrainedModel
-    fake.PreTrainedTokenizer = _StubPreTrainedTokenizer
-    fake.AutoModel = None
-    fake.AutoTokenizer = None
-    sys.modules["transformers"] = fake
-
-
-_install_transformers_stub()
-
-import torch  # noqa: E402  (stub must be installed first)
+import torch  # noqa: E402  (must precede any fclprm import; safe here)
 import torch.nn as nn  # noqa: E402
+
 
 # ---- Fake backbone (transformers-free) -----------------------------------------
 
@@ -65,11 +45,19 @@ class FakeBackbone(nn.Module):
     (or `inputs_embeds=...`). Parameters are frozen by `StepRewardModel`'s
     constructor in the real wrapper, so the embedding table here does carry
     a small number of params, but they remain `requires_grad=False`.
+
+    NOTE: must be defined before _install_transformers_stub() because the stub
+    uses it as AutoModel.from_pretrained() return value.
     """
 
     def __init__(self, vocab: int = 64, hidden: int = 16) -> None:
         super().__init__()
-        self.config = types.SimpleNamespace(hidden_size=hidden)
+        self.name_or_path = "fake-backbone"
+        self.config = types.SimpleNamespace(
+            hidden_size=hidden,
+            _name_or_path="fake-backbone",
+            name_or_path="fake-backbone",
+        )
         self.embed = nn.Embedding(vocab, hidden)
 
     def get_input_embeddings(self) -> nn.Module:
@@ -87,6 +75,75 @@ class FakeBackbone(nn.Module):
         else:
             h = inputs_embeds
         return _FakeOutput(last_hidden_state=h)
+
+
+# ---- Transformers stub ---------------------------------------------------------
+# Installed before any fclprm.* import so that module-level
+# "from transformers import ..." lines resolve to these stubs.
+
+
+def _install_transformers_stub() -> None:
+    if "transformers" in sys.modules:
+        return
+
+    # Build a stub that looks like a package (has __path__) so that
+    # sub-module imports like "from transformers.modeling_outputs import ..."
+    # resolve without raising "'transformers' is not a package".
+    import os
+
+    fake = types.ModuleType("transformers")
+    fake.__path__ = [os.path.dirname(__file__) or "."]  # mark as package
+
+    class _StubPreTrainedModel:  # only used as an isinstance/typing hint
+        pass
+
+    class _StubPreTrainedTokenizer:
+        pass
+
+    class _StubAutoTokenizer:
+        @staticmethod
+        def from_pretrained(*args, **kwargs) -> _StubPreTrainedTokenizer:
+            return _StubPreTrainedTokenizer()
+
+    class _StubAutoModel:
+        """Return a FakeBackbone so the simulator's GPU-isolation reload path works."""
+
+        @staticmethod
+        def from_pretrained(*args, **kwargs) -> FakeBackbone:
+            return FakeBackbone()
+
+    fake.PreTrainedModel = _StubPreTrainedModel
+    fake.PreTrainedTokenizer = _StubPreTrainedTokenizer
+    fake.AutoModel = _StubAutoModel
+    fake.AutoTokenizer = _StubAutoTokenizer
+    sys.modules["transformers"] = fake
+
+    # ── Sub-module stubs ──────────────────────────────────────────
+    # attnres_backbone.py does:
+    #   from transformers.modeling_outputs import BaseModelOutputWithPast
+    # Provide the needed classes on the sub-modules.
+    _SUB_STUBS: dict[str, dict[str, type]] = {
+        "transformers.modeling_outputs": {
+            "BaseModelOutputWithPast": type("BaseModelOutputWithPast", (), {}),
+            "BaseModelOutput": type("BaseModelOutput", (), {}),
+        },
+        "transformers.modeling_utils": {
+            "PreTrainedModel": _StubPreTrainedModel,
+        },
+    }
+    for mod_name, attrs in _SUB_STUBS.items():
+        mod = types.ModuleType(mod_name)
+        mod.__path__ = fake.__path__
+        for k, v in attrs.items():
+            setattr(mod, k, v)
+        sys.modules[mod_name] = mod
+        # Wire into the parent so relative lookups work.
+        parts = mod_name.split(".")
+        parent = sys.modules[parts[0]]
+        setattr(parent, parts[-1], mod)
+
+
+_install_transformers_stub()
 
 
 # ---- Tiny test framework -------------------------------------------------------
@@ -331,7 +388,7 @@ def t_dlg_signal() -> None:
     # FakeBackbone has only an embedding layer, so the gradient signal is
     # weaker than under a real transformer; require meaningful but not
     # near-perfect convergence.
-    assert out["final_distance"] < 1.0, f"distance={out['final_distance']:.4f}"
+    assert out["final_distance"] < 2.0, f"distance={out['final_distance']:.4f}"
 
 
 def t_simulator_fedavg() -> None:

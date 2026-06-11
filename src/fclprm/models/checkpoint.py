@@ -1,5 +1,6 @@
 """Model checkpoint save/load utilities."""
 
+import gc
 import os
 from pathlib import Path
 
@@ -14,8 +15,12 @@ def save_checkpoint(
     client_id: int,
     milestone: str,
     save_dir: str,
+    device: str = "cuda",
 ) -> str:
     """Save training checkpoint.
+
+    All tensors are moved to CPU before serialization, then freed, to avoid
+    holding GPU memory during disk I/O.  GPU cache is flushed afterward.
 
     Naming: {model_name}_m{milestone}_r{round}_c{client_id}.pt
 
@@ -26,6 +31,7 @@ def save_checkpoint(
         client_id: Client identifier (-1 for global model).
         milestone: Milestone tag (e.g., "M4").
         save_dir: Directory to save checkpoint.
+        device: Device hint for cache flush ("cuda" or "cpu").
 
     Returns:
         Path to saved checkpoint file.
@@ -37,15 +43,26 @@ def save_checkpoint(
     filename = f"{model_name}_m{milestone}_r{round_num}_c{client_id}.pt"
     filepath = save_path / filename
 
+    # Move state dict to CPU before saving to avoid GPU memory spike during I/O
+    cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    cpu_optim = {k: v.cpu() for k, v in optimizer.state_dict().items()}
+
     checkpoint = {
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
+        "model_state_dict": cpu_state,
+        "optimizer_state_dict": cpu_optim,
         "round_num": round_num,
         "client_id": client_id,
         "milestone": milestone,
     }
 
     torch.save(checkpoint, filepath)
+
+    # Free CPU-side copies and flush GPU cache
+    del cpu_state, cpu_optim, checkpoint
+    gc.collect()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
     return str(filepath)
 
 

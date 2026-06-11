@@ -1,17 +1,17 @@
-# M3-full: FedAvg full-parameter FT (standard ReLU head) — Pythia-1.4B
-# Highest capacity on the continuum. All backbone + PRM head trainable.
+# M3-head-only: FedAvg head-only (256-dim MLP, ReLU) — Pythia-1.4B
+# Baseline: lowest capacity on the capacity continuum.
 # P0-2: Capacity continuum core experiment.
 
 experiment:
-  name: "m3_fedavg_full_1.4b"
-  milestone: "M3-full"
-  description: "FedAvg full-parameter FT: Pythia-1.4B, 4 clients, 25 rounds"
+  name: "m3_fedavg_head_1.4b"
+  milestone: "M3-head"
+  description: "FedAvg head-only (ReLU): Pythia-1.4B, 4 clients, 25 rounds"
   seed: 42
 
 model:
   backbone: "EleutherAI/pythia-1.4b"
   hidden_dim: 2048
-  freeze_backbone: false
+  freeze_backbone: true
   prm_head_dim: 256
 
 data:
@@ -26,7 +26,7 @@ federated:
   num_rounds: 25
   local_epochs: 1
   local_batch_size: 4
-  local_learning_rate: 5.0e-6
+  local_learning_rate: 1e-4
   aggregation: "fedavg"
   participation_rate: 1.0
 
@@ -43,8 +43,8 @@ evaluation:
   symmetrical_cd_spi: true
 
 logging:
-  log_dir: "./experiments/M3_full_1.4b/results/logs"
-  checkpoint_dir: "./experiments/M3_full_1.4b/results/checkpoints"
+  log_dir: "./experiments/M3_head_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M3_head_1.4b/results/checkpoints"
   save_every: 5
 
 hardware:

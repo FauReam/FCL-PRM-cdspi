@@ -343,8 +343,8 @@
 
 ```
 [ ] 6. 异质性模式消融（数量倾斜 + 标签偏移 + 混合）
-[ ] 7. MoE-style partial FT 探索
-[ ] 8. CD-SPI vs Performance correlation 分析
+[x] 7. MoE-style partial FT 探索（last4/last8/mlp_only/attn_only configs + base_wrapper 扩展）
+[x] 8. CD-SPI vs Performance correlation 分析（analysis.py — Pearson/Spearman/cross-experiment/delta）
 ```
 
 ### Phase 3：论文重构

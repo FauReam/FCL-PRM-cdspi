@@ -1,0 +1,53 @@
+# M3: Hard federated — FedAvg head-only on VersaPRM multi-domain
+# Purpose: Measure FedAvg degradation on hard multi-domain data
+#   Compare against m2_hard_centralized to see domain gap
+# Run: python scripts/run_federated.py --config configs/m3_hard_fedavg_1.4b.yaml
+
+experiment:
+  name: "m3_hard_fedavg_1.4b"
+  milestone: "M3"
+  description: "FedAvg head-only on VersaPRM multi-domain, batch=128"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  prm_head_dim: 256
+  freeze_backbone: true
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 5000
+  max_length: 512
+
+federated:
+  num_clients: 4
+  num_rounds: 25
+  local_epochs: 1
+  local_batch_size: 128
+  local_learning_rate: 1.0e-4
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 5
+
+evaluation:
+  eval_every: 1
+  eval_split: "val"
+  compute_cd_spi: true
+  skip_eval: false
+
+logging:
+  log_dir: "./experiments/M3_hard_fedavg_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M3_hard_fedavg_1.4b/results/checkpoints"
+  save_every: 5
+  save_client_checkpoints: false
+
+hardware:
+  device: "cuda"
+  num_workers: 0

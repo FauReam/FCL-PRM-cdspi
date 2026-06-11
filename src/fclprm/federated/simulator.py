@@ -40,6 +40,7 @@ class FederatedSimulator:
         ood_domains: list[str] | None = None,
         eval_label_noise: bool = False,
         label_noise_ratios: list[float] | None = None,
+        compute_symmetrical_cd_spi: bool = False,
     ) -> None:
         """Initialize simulator.
 
@@ -58,7 +59,8 @@ class FederatedSimulator:
             dp_enabled: Whether to enable DP-SGD on clients.
             dp_epsilon: Privacy budget epsilon (if DP enabled).
             dp_delta: Privacy budget delta (if DP enabled).
-            compute_cd_spi: Whether to compute CD-SPI metric each round.
+            compute_cd_spi: Whether to compute CD-SPI metric each round
+                (asymmetrical: using head embeddings).
             eval_every: Evaluate per-domain MSE every N rounds (1 = every round).
             participation_rate: Fraction of clients participating each round
                 (1.0 = all clients, <1.0 = random subset).
@@ -66,6 +68,9 @@ class FederatedSimulator:
             ood_domains: Domain labels for each client (for OOD eval).
             eval_label_noise: Whether to evaluate under label perturbation.
             label_noise_ratios: Label flip ratios for noise robustness test.
+            compute_symmetrical_cd_spi: Whether to compute symmetrical CD-SPI
+                (using backbone penultimate layer) and CKA as independent
+                cross-validation. Addresses expert panel P0* requirement.
         """
         self.num_clients = num_clients
         self.num_rounds = num_rounds
@@ -86,6 +91,7 @@ class FederatedSimulator:
         self.ood_domains = ood_domains or []
         self.eval_label_noise = eval_label_noise
         self.label_noise_ratios = label_noise_ratios or [0.0, 0.1, 0.2]
+        self.compute_symmetrical_cd_spi = compute_symmetrical_cd_spi
 
         if aggregation_rule == "anchor_prm" and anchor_inputs is None:
             raise ValueError(
@@ -229,6 +235,84 @@ class FederatedSimulator:
         per_step = compute_cd_spi_batch(self.anchor_steps, all_client_embeddings)
         mean_cd_spi = sum(per_step.values()) / len(per_step) if per_step else 0.0
         return {"cd_spi_mean": mean_cd_spi, "cd_spi_per_step": per_step}
+
+    def _eval_cd_spi_symmetrical(self, device: str) -> dict:
+        """Compute symmetrical CD-SPI using backbone penultimate-layer embeddings.
+
+        Uses get_backbone_embedding() instead of get_head_embedding() so that
+        both head-only and full-FT configs are measured in the same embedding
+        space (backbone penultimate layer). This eliminates the measurement
+        asymmetry identified by the expert panel.
+
+        For head-only configs (frozen backbone), symmetrical CD-SPI will be ~0
+        because backbone is identical across clients. For full FT, it captures
+        actual backbone divergence. The contrast between this and the
+        asymmetrical head-embedding CD-SPI reveals whether head-only
+        divergence is real structure or random noise.
+
+        Also computes PCA EVR (Phase 2 of diagnostic protocol) and CKA
+        (independent cross-validation).
+
+        Returns:
+            Dict with 'cd_spi_sym_mean', 'cd_spi_sym_per_step', 'pca_evr',
+            and 'cka' metrics.
+        """
+        from tqdm import tqdm
+
+        if self.anchor_inputs is None or not self.anchor_steps:
+            return {}
+
+        from fclprm.metrics.cd_spi import compute_cd_spi_batch, compute_pca_evr
+        from fclprm.metrics.cd_spi_stats import permutation_test_cd_spi
+        from fclprm.metrics.cka import compute_client_cka_matrix
+
+        eval_device = device
+        all_client_embeddings: dict[str, list[torch.Tensor]] = {}
+        for client in tqdm(self.clients, desc="[CD-SPI sym] Extracting", leave=True):
+            client.model.to(eval_device)
+            client.model.eval()
+            input_ids = self.anchor_inputs["input_ids"].to(eval_device)
+            attention_mask = self.anchor_inputs["attention_mask"].to(eval_device)
+            with torch.no_grad():
+                # Use backbone penultimate layer for symmetrical measurement
+                embs = client.model.get_backbone_embedding(input_ids, attention_mask)
+            all_client_embeddings[str(client.client_id)] = [
+                e for e in embs.detach().cpu()
+            ]
+            client.model.to(device)
+
+        per_step = compute_cd_spi_batch(self.anchor_steps, all_client_embeddings)
+        mean_cd_spi = sum(per_step.values()) / len(per_step) if per_step else 0.0
+
+        # PCA EVR (Phase 2 diagnostic)
+        # Average embeddings across steps for each client, then compute PCA
+        client_avg_embs = {
+            cid: torch.stack(embs).mean(dim=0)
+            for cid, embs in all_client_embeddings.items()
+        }
+        pca_evr = compute_pca_evr(client_avg_embs)
+
+        # Permutation test
+        perm_result = permutation_test_cd_spi(client_avg_embs)
+
+        # CKA cross-validation
+        client_feature_matrix = {
+            cid: torch.stack(embs)
+            for cid, embs in all_client_embeddings.items()
+        }
+        cka_result = compute_client_cka_matrix(client_feature_matrix)
+
+        return {
+            "cd_spi_sym_mean": mean_cd_spi,
+            "cd_spi_sym_per_step": per_step,
+            "pca_evr": pca_evr,
+            "permutation_test": {
+                "p_value": perm_result.get("p_value"),
+                "significant": perm_result.get("significant"),
+                "effect_size": perm_result.get("effect_size"),
+            },
+            "cka": cka_result,
+        }
 
     def _eval_function_space_divergence(self, device: str) -> dict:
         """Compute function-space output divergence across clients.
@@ -450,6 +534,7 @@ class FederatedSimulator:
             # aggregation so it reflects client-specific head weights.
             cd_spi_metrics: dict[str, float] = {}
             func_divergence: dict[str, float] = {}
+            cd_spi_sym_metrics: dict = {}
             if self.compute_cd_spi and len(client_updates) >= 2:
                 cd_spi_metrics = self._eval_cd_spi(device=device)
                 if cd_spi_metrics:
@@ -474,12 +559,37 @@ class FederatedSimulator:
                         f"js={func_divergence.get('output_js_divergence', 0.0):.4f}"
                     )
 
+                # Symmetrical CD-SPI (backbone penultimate layer) + CKA + PCA EVR
+                # Independent cross-validation addressing expert panel P0*
+                cd_spi_sym_metrics: dict = {}
+                if self.compute_symmetrical_cd_spi and len(client_updates) >= 2:
+                    cd_spi_sym_metrics = self._eval_cd_spi_symmetrical(device=device)
+                    if cd_spi_sym_metrics:
+                        tqdm.write(
+                            f"  [CD-SPI sym] mean={cd_spi_sym_metrics.get('cd_spi_sym_mean', 0.0):.4f}"
+                        )
+                        pca = cd_spi_sym_metrics.get("pca_evr", {})
+                        if pca:
+                            tqdm.write(
+                                f"  [PCA EVR] first={pca.get('evr_first', 0.0):.4f} "
+                                f"interpretation={pca.get('interpretation', 'N/A')}"
+                            )
+                        cka = cd_spi_sym_metrics.get("cka", {})
+                        if cka:
+                            tqdm.write(
+                                f"  [CKA] mean={cka.get('cka_mean', 0.0):.4f}"
+                            )
+
             per_domain: dict[str, float] = {}
 
             if not self.skip_eval:
                 # ---- GPU Isolation: Save -> Clear -> Reload for Validation ----
                 temp_path = Path(f"./.temp_model_r{round_num}.pt")
-                torch.save(self.server.get_global_model().state_dict(), temp_path)
+                state = {
+                    k: v.cpu() for k, v in self.server.get_global_model().state_dict().items()
+                }
+                torch.save(state, temp_path)
+                del state
 
                 # Move original models to CPU to free GPU
                 self.global_model.cpu()
@@ -584,6 +694,8 @@ class FederatedSimulator:
                 history_entry["cd_spi"] = cd_spi_metrics
             if func_divergence:
                 history_entry["func_divergence"] = func_divergence
+            if cd_spi_sym_metrics:
+                history_entry["cd_spi_sym"] = cd_spi_sym_metrics
             if ood_results:
                 history_entry["ood"] = ood_results
             if label_noise_results:

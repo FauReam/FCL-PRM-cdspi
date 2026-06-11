@@ -1,0 +1,47 @@
+# Smoke test: VersaPRM head-only centralized with large batch
+# Purpose: Verify pipeline works + confirm task is hard enough
+#   Expected accuracy < 95% (vs old PRM800K's 99.83%)
+# Run: python scripts/train_centralized_prm.py --config configs/smoke_versaprm.yaml
+
+experiment:
+  name: "smoke_versaprm_head_only"
+  milestone: "SMOKE"
+  description: "Smoke test: head-only centralized on VersaPRM, batch=128"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  prm_head_dim: 256
+  freeze_backbone: true
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_domain: 200
+  max_length: 512
+
+training:
+  batch_size: 128
+  num_epochs: 1
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_grad_norm: 1.0
+  optimizer: "adamw"
+  scheduler: "cosine"
+
+evaluation:
+  eval_every: 50
+  eval_batch_size: 128
+  metrics: ["accuracy", "f1", "auc"]
+
+logging:
+  log_dir: "./experiments/smoke_versaprm/results/logs"
+  checkpoint_dir: "./experiments/smoke_versaprm/results/checkpoints"
+  save_every: 1000
+  use_wandb: false
+
+hardware:
+  device: "cuda"
+  num_workers: 0

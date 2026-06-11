@@ -1,18 +1,22 @@
-# M3-full: FedAvg full-parameter FT (standard ReLU head) — Pythia-1.4B
-# Highest capacity on the continuum. All backbone + PRM head trainable.
-# P0-2: Capacity continuum core experiment.
+# M3-PartialFT(last8): FedAvg partial-FT (last 8 layers) — Pythia-1.4B
+# Unfreezes the last 8 transformer layers + PRM head.
+# Higher capacity point — tests whether 1/3 of the backbone suffices.
+# P1-5: MoE-style partial FT sweep — layer-count dimension.
 
 experiment:
-  name: "m3_fedavg_full_1.4b"
-  milestone: "M3-full"
-  description: "FedAvg full-parameter FT: Pythia-1.4B, 4 clients, 25 rounds"
+  name: "m3_fedavg_partialft_last8_1.4b"
+  milestone: "M3-partial"
+  description: "FedAvg partial-FT (last 8 layers): Pythia-1.4B, 4 clients, 25 rounds"
   seed: 42
 
 model:
   backbone: "EleutherAI/pythia-1.4b"
   hidden_dim: 2048
-  freeze_backbone: false
+  num_layers: 24
+  freeze_backbone: true
   prm_head_dim: 256
+  partial_ft_layers: 8
+  partial_ft_mode: "last_n"
 
 data:
   dataset: "versaprm"
@@ -40,11 +44,10 @@ evaluation:
   eval_every: 1
   eval_split: "val"
   compute_cd_spi: true
-  symmetrical_cd_spi: true
 
 logging:
-  log_dir: "./experiments/M3_full_1.4b/results/logs"
-  checkpoint_dir: "./experiments/M3_full_1.4b/results/checkpoints"
+  log_dir: "./experiments/M3_partialft_last8_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M3_partialft_last8_1.4b/results/checkpoints"
   save_every: 5
 
 hardware:

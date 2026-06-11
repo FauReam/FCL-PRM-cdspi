@@ -4,6 +4,14 @@ Measures whether the same reasoning step shares embedding directions
 across different client domains when trained in isolation.
 
 Used in v2 to measure cross-client divergence under full-parameter FT.
+
+Phase 2 of CD-SPI diagnostic protocol:
+    compute_pca_evr() — Principal Component Explained Variance Ratio,
+    complementing the permutation test (in cd_spi_stats.py) as the second
+    stage of the CD-SPI diagnostic framework.
+
+    EVR > 0.6 → divergence is structured (low-dimensional manifold)
+    EVR < 0.4 → divergence is near-noise (high-dimensional sphere)
 """
 
 import torch
@@ -120,3 +128,84 @@ def compute_cd_spi_by_category(
         )
 
     return category_cspi
+
+
+def compute_pca_evr(
+    client_embeddings: dict[str, torch.Tensor],
+) -> dict:
+    """Compute Principal Component Explained Variance Ratio (PCA EVR).
+
+    Phase 2 of the CD-SPI diagnostic protocol.  PCA EVR measures whether
+    cross-client embedding variation is structured (low-rank, high EVR for
+    first PC) or noise-like (isotropic, low EVR).
+
+    Interpretation:
+      - EVR > 0.6: divergence is STRUCTURED (low-dimensional manifold)
+          → clients vary along consistent semantic axes
+      - EVR < 0.4: divergence is NEAR-NOISE (high-dimensional sphere)
+          → cross-client differences are essentially random
+      - 0.4 <= EVR <= 0.6: ambiguous, requires permutation test
+
+    Args:
+        client_embeddings: Dict mapping client_id -> embedding tensor (D,).
+
+    Returns:
+        Dict with:
+          - evr_first: float — EVR of the first principal component
+          - evr_ratio: float — evr_first / evr_second (large = highly structured)
+          - evr_all: list[float] — EVR for all components
+          - interpretation: str — qualitative label
+          - n_clients: int — number of clients
+          - embedding_dim: int — dimension of each embedding
+
+    Raises:
+        ValueError: If fewer than 3 clients (need at least 3 for PCA).
+    """
+    if len(client_embeddings) < 3:
+        raise ValueError("PCA EVR requires at least 3 client embeddings")
+
+    embeddings = list(client_embeddings.values())
+    n_clients = len(embeddings)
+    d = embeddings[0].shape[0]
+
+    # Stack embeddings: (n_clients, D)
+    X = torch.stack(embeddings)
+
+    # Center the data
+    X_centered = X - X.mean(dim=0, keepdim=True)
+
+    # Compute covariance matrix and eigen-decomposition
+    # For n_clients < D, use SVD on X directly (more efficient)
+    if n_clients < d:
+        U, S, Vt = torch.linalg.svd(X_centered, full_matrices=False)
+        # Explained variance = S^2 / (n_clients - 1)
+        explained_var = S.pow(2) / (n_clients - 1)
+        total_var = explained_var.sum()
+    else:
+        cov = (X_centered.T @ X_centered) / (n_clients - 1)
+        eigenvalues = torch.linalg.eigvalsh(cov)
+        # eigenvalues are in ascending order; reverse to descending
+        eigenvalues = eigenvalues.flip(0)
+        total_var = eigenvalues.sum()
+        explained_var = eigenvalues
+
+    evr = explained_var / total_var.clamp(min=1e-12)
+    evr_first = float(evr[0].item()) if len(evr) > 0 else 0.0
+    evr_second = float(evr[1].item()) if len(evr) > 1 else 0.0
+
+    # Determine interpretation
+    if evr_first > 0.6:
+        interpretation = "structured"
+    elif evr_first < 0.4:
+        interpretation = "near_noise"
+    else:
+        interpretation = "ambiguous"
+
+    return {
+        "evr_first": evr_first,
+        "evr_ratio": evr_first / max(evr_second, 1e-12),
+        "evr_all": [float(v) for v in evr],
+        "interpretation": interpretation,
+        "n_clients": n_clients,
+        "embedding_dim": d,
+    }

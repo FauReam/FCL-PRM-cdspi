@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -133,13 +134,17 @@ def main() -> None:
     attnres_config = config.get("model.attnres", None)
     lora_config = config.get("model.lora", None)
     partial_ft_layers = config.get("model.partial_ft_layers", 0)
+    partial_ft_mode = config.get("model.partial_ft_mode", "last_n")
+    head_activation = config.get("model.head_activation", "relu")
 
     if attnres_config is not None:
         print(f"[M2] Block AttnRes enabled: {attnres_config.get('num_blocks', 8)} blocks")
     if lora_config is not None:
         print(f"[M2] LoRA enabled: r={lora_config.get('r', 8)}")
     if partial_ft_layers > 0:
-        print(f"[M2] Partial FT: last {partial_ft_layers} layers unfrozen")
+        print(f"[M2] Partial FT: mode={partial_ft_mode}, last {partial_ft_layers} layers unfrozen")
+    if head_activation != "relu":
+        print(f"[M2] Head activation: {head_activation} (architecture ablation)")
 
     model = StepRewardModel(
         backbone=backbone,
@@ -148,6 +153,8 @@ def main() -> None:
         attnres=attnres_config,
         lora_config=lora_config,
         partial_ft_layers=partial_ft_layers,
+        partial_ft_mode=partial_ft_mode,
+        head_activation=head_activation,
     )
     model.to(device)
 
@@ -155,7 +162,7 @@ def main() -> None:
     if lora_config is not None:
         parts.append(f"LoRA(r={lora_config.get('r', 8)})")
     elif partial_ft_layers > 0:
-        parts.append(f"partial-FT(last {partial_ft_layers})")
+        parts.append(f"partial-FT({partial_ft_mode}, last {partial_ft_layers})")
     elif freeze_backbone:
         parts.append("head-only")
     else:
@@ -165,11 +172,16 @@ def main() -> None:
     mode = " + ".join(parts)
     print(f"[M2] Training mode: {mode} ({load_dtype})")
 
-    if device.type == "cuda" and hasattr(torch, "compile") and sys.platform != "win32":
+    # torch.compile needs Triton, which requires x86-64 + CUDA.
+    # On ARM64 (NVIDIA GB10) Triton cannot compile its CUDA utils.
+    is_arm64 = sys.platform.startswith("linux") and (
+        hasattr(os, "uname") and os.uname().machine in ("aarch64", "arm64")
+    )
+    if device.type == "cuda" and hasattr(torch, "compile") and sys.platform != "win32" and not is_arm64:
         print("[M2] Enabling torch.compile for faster training...")
         model = torch.compile(model, mode="max-autotune")
-    elif device.type == "cuda" and sys.platform == "win32":
-        print("[M2] Skipping torch.compile on Windows (Triton unavailable).")
+    elif device.type == "cuda" and (sys.platform == "win32" or is_arm64):
+        print(f"[M2] Skipping torch.compile ({'ARM64' if is_arm64 else 'Windows'}, Triton unavailable).")
 
     print(f"[M2] Loading data from: {config.get('data.data_dir')}")
     dataset_name = config.get("data.dataset", "prm800k")
@@ -352,12 +364,26 @@ def main() -> None:
             unit="batch",
         )
         for batch in pbar:
+            # Skip batches already trained before resume
+            if epoch == start_epoch and num_batches <= skip_batches:
+                num_batches += 1
+                continue
+
             num_batches += 1
             global_step += 1
 
-            # Skip batches already trained before resume
-            if epoch == start_epoch and num_batches <= skip_batches:
-                continue
+            # Periodic save every save_every steps
+            if save_every > 0 and global_step % save_every == 0:
+                step_ckpt = save_checkpoint(
+                    model=model,
+                    optimizer=optimizer,
+                    round_num=global_step,
+                    client_id=-1,
+                    milestone="M2",
+                    save_dir=checkpoint_dir,
+                    device=device,
+                )
+                print(f"  [CKPT] Saved periodic checkpoint at step {global_step}: {Path(step_ckpt).name}")
 
             input_ids = batch["input_ids"].to(
                 device, non_blocking=device.type == "cuda"
@@ -451,6 +477,7 @@ def main() -> None:
                     )
                     print(f"  [CKPT] Saved new best (val_loss={best_val_loss:.4f}): {Path(last_best_ckpt).name}")
 
+        # Periodic save every save_every steps regardless of eval
         effective_batches = (
             num_batches - skip_batches
             if epoch == start_epoch and skip_batches > 0

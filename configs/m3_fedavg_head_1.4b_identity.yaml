@@ -1,0 +1,55 @@
+# M3-head-only Identity: FedAvg head-only (256-dim MLP, Identity/linear) — Pythia-1.4B
+# Architecture ablation: no activation (linear probe).
+# P1-1: Verify CD-SPI consistency across head architectures.
+# Linear probe baseline — if Identity already achieves non-noise CD-SPI,
+# the nonlinear activation is not the source of head capacity limits.
+
+experiment:
+  name: "m3_fedavg_head_1.4b_identity"
+  milestone: "M3-head"
+  description: "FedAvg head-only (Identity/linear): Pythia-1.4B, 4 clients, 25 rounds, architecture ablation"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  hidden_dim: 2048
+  freeze_backbone: true
+  prm_head_dim: 256
+  head_activation: "identity"
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 5000
+  max_length: 256
+
+federated:
+  num_clients: 4
+  num_rounds: 25
+  local_epochs: 1
+  local_batch_size: 4
+  local_learning_rate: 1e-4
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 5
+
+evaluation:
+  eval_every: 1
+  eval_split: "val"
+  compute_cd_spi: true
+  symmetrical_cd_spi: true
+
+logging:
+  log_dir: "./experiments/M3_head_identity_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M3_head_identity_1.4b/results/checkpoints"
+  save_every: 5
+
+hardware:
+  device: "cuda"
+  num_workers: 0

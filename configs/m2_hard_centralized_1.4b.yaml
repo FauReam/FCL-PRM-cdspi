@@ -1,0 +1,47 @@
+# M2: Hard centralized anchor — VersaPRM multi-domain, head-only
+# Purpose: Establish centralized baseline on hard multi-domain data
+#   Task is hard enough → accuracy < 99% → there is room for degradation
+# Run: python scripts/train_centralized_prm.py --config configs/m2_hard_centralized_1.4b.yaml
+
+experiment:
+  name: "m2_hard_centralized_1.4b"
+  milestone: "M2"
+  description: "Head-only centralized on VersaPRM multi-domain, batch=128"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  prm_head_dim: 256
+  freeze_backbone: true
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_domain: 5000
+  max_length: 512
+
+training:
+  batch_size: 128
+  num_epochs: 3
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 200
+  max_grad_norm: 1.0
+  optimizer: "adamw"
+  scheduler: "cosine"
+
+evaluation:
+  eval_every: 500
+  eval_batch_size: 128
+  metrics: ["accuracy", "f1", "auc"]
+
+logging:
+  log_dir: "./experiments/M2_hard_centralized_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M2_hard_centralized_1.4b/results/checkpoints"
+  save_every: 1000
+  use_wandb: false
+
+hardware:
+  device: "cuda"
+  num_workers: 0
