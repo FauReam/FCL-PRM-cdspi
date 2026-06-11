@@ -131,19 +131,39 @@ def main() -> None:
         )
         return
     attnres_config = config.get("model.attnres", None)
+    lora_config = config.get("model.lora", None)
+    partial_ft_layers = config.get("model.partial_ft_layers", 0)
+
     if attnres_config is not None:
         print(f"[M2] Block AttnRes enabled: {attnres_config.get('num_blocks', 8)} blocks")
+    if lora_config is not None:
+        print(f"[M2] LoRA enabled: r={lora_config.get('r', 8)}")
+    if partial_ft_layers > 0:
+        print(f"[M2] Partial FT: last {partial_ft_layers} layers unfrozen")
+
     model = StepRewardModel(
         backbone=backbone,
         head_dim=config.get("model.prm_head_dim", 256),
         freeze_backbone=freeze_backbone,
         attnres=attnres_config,
+        lora_config=lora_config,
+        partial_ft_layers=partial_ft_layers,
     )
     model.to(device)
 
-    mode = "head-only" if freeze_backbone else "full-parameter"
-    extra = " + AttnRes" if attnres_config is not None else ""
-    print(f"[M2] Training mode: {mode}{extra} ({load_dtype})")
+    parts = []
+    if lora_config is not None:
+        parts.append(f"LoRA(r={lora_config.get('r', 8)})")
+    elif partial_ft_layers > 0:
+        parts.append(f"partial-FT(last {partial_ft_layers})")
+    elif freeze_backbone:
+        parts.append("head-only")
+    else:
+        parts.append("full-parameter")
+    if attnres_config is not None:
+        parts.append("AttnRes")
+    mode = " + ".join(parts)
+    print(f"[M2] Training mode: {mode} ({load_dtype})")
 
     if device.type == "cuda" and hasattr(torch, "compile") and sys.platform != "win32":
         print("[M2] Enabling torch.compile for faster training...")

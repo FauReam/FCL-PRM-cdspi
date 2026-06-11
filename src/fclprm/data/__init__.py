@@ -1,5 +1,11 @@
 """Data loaders and preprocessing utilities."""
 
+from fclprm.data.heterogeneity import (
+    dirichlet_partition,
+    get_partition_fn,
+    label_shift_partition,
+    mixed_partition,
+)
 from fclprm.data.med_loader import MedPRMBenchLoader
 from fclprm.data.prm800k import PRM800KLoader
 from fclprm.data.utils import collate_step_batch, split_cot_into_steps
@@ -11,4 +17,8 @@ __all__ = [
     "MedPRMBenchLoader",
     "split_cot_into_steps",
     "collate_step_batch",
+    "dirichlet_partition",
+    "label_shift_partition",
+    "mixed_partition",
+    "get_partition_fn",
 ]

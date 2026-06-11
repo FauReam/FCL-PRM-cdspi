@@ -36,6 +36,10 @@ class FederatedSimulator:
         eval_every: int = 1,
         participation_rate: float = 1.0,
         skip_eval: bool = False,
+        eval_ood: bool = False,
+        ood_domains: list[str] | None = None,
+        eval_label_noise: bool = False,
+        label_noise_ratios: list[float] | None = None,
     ) -> None:
         """Initialize simulator.
 
@@ -54,11 +58,14 @@ class FederatedSimulator:
             dp_enabled: Whether to enable DP-SGD on clients.
             dp_epsilon: Privacy budget epsilon (if DP enabled).
             dp_delta: Privacy budget delta (if DP enabled).
-            compute_cd_spi: Whether to compute CD-SPI metric each round
-                using locally-trained client models on anchor steps.
+            compute_cd_spi: Whether to compute CD-SPI metric each round.
             eval_every: Evaluate per-domain MSE every N rounds (1 = every round).
             participation_rate: Fraction of clients participating each round
                 (1.0 = all clients, <1.0 = random subset).
+            eval_ood: Whether to run cross-domain OOD evaluation.
+            ood_domains: Domain labels for each client (for OOD eval).
+            eval_label_noise: Whether to evaluate under label perturbation.
+            label_noise_ratios: Label flip ratios for noise robustness test.
         """
         self.num_clients = num_clients
         self.num_rounds = num_rounds
@@ -75,6 +82,10 @@ class FederatedSimulator:
         self.eval_every = max(eval_every, 1)
         self.participation_rate = max(0.0, min(1.0, participation_rate))
         self.skip_eval = skip_eval
+        self.eval_ood = eval_ood
+        self.ood_domains = ood_domains or []
+        self.eval_label_noise = eval_label_noise
+        self.label_noise_ratios = label_noise_ratios or [0.0, 0.1, 0.2]
 
         if aggregation_rule == "anchor_prm" and anchor_inputs is None:
             raise ValueError(
@@ -219,6 +230,104 @@ class FederatedSimulator:
         mean_cd_spi = sum(per_step.values()) / len(per_step) if per_step else 0.0
         return {"cd_spi_mean": mean_cd_spi, "cd_spi_per_step": per_step}
 
+    def _eval_function_space_divergence(self, device: str) -> dict:
+        """Compute function-space output divergence across clients.
+
+        Uses client reward predictions on shared anchor steps to compute
+        output cosine divergence and JS divergence — complementing CD-SPI's
+        parameter-space measurement with function-space validation.
+        """
+        from torch.utils.data import DataLoader
+        from fclprm.data.utils import collate_step_batch
+        from fclprm.metrics.cd_spi_stats import (
+            compute_output_cosine_divergence,
+            compute_js_output_divergence,
+        )
+
+        if self.anchor_inputs is None or len(self.clients) < 2:
+            return {}
+
+        # Collect predictions from each client model on anchor inputs
+        client_preds: dict[str, torch.Tensor] = {}
+        input_ids = self.anchor_inputs["input_ids"].to(device)
+        attention_mask = self.anchor_inputs["attention_mask"].to(device)
+
+        with torch.no_grad():
+            for client in self.clients:
+                client.model.to(device)
+                client.model.eval()
+                preds = client.model(input_ids, attention_mask)
+                client_preds[str(client.client_id)] = preds.detach().cpu()
+
+        output_cos_div = compute_output_cosine_divergence(client_preds)
+        js_div = compute_js_output_divergence(client_preds)
+
+        return {
+            "output_cosine_divergence": output_cos_div,
+            "output_js_divergence": js_div,
+        }
+
+    def _eval_ood_cross_domain(self, device: str, batch_size: int) -> dict:
+        """Cross-domain OOD evaluation: test each client on all other domains.
+
+        Returns per-client OOD MSE, aggregated into a single summary.
+        """
+        from fclprm.metrics.ood_eval import build_cross_domain_test_splits, evaluate_cross_domain
+
+        if not self.ood_domains or len(self.ood_domains) < 2:
+            return {}
+
+        global_model = self.server.get_global_model()
+        global_model.to(device)
+        global_model.eval()
+
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(
+                global_model.backbone.config._name_or_path
+                if hasattr(global_model.backbone.config, "_name_or_path")
+                else global_model.backbone.config.name_or_path
+                if hasattr(global_model.backbone.config, "name_or_path")
+                else "EleutherAI/pythia-1.4b"
+            )
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+        except Exception:
+            return {}
+
+        ood_splits = build_cross_domain_test_splits(
+            self.client_data, self.ood_domains
+        )
+        with torch.no_grad():
+            results = evaluate_cross_domain(
+                global_model, tokenizer, ood_splits,
+                device=device, batch_size=batch_size,
+            )
+        return results
+
+    def _eval_label_noise(self, device: str, batch_size: int) -> dict:
+        """Evaluate global model under label perturbation at multiple noise levels."""
+        from fclprm.metrics.ood_eval import (
+            build_perturbation_test_sets,
+            evaluate_label_noise_robustness,
+        )
+
+        global_model = self.server.get_global_model()
+        global_model.to(device)
+        global_model.eval()
+
+        test_sets = build_perturbation_test_sets(
+            self.client_data,
+            flip_ratios=self.label_noise_ratios,
+            seed=self.seed,
+        )
+        with torch.no_grad():
+            results = evaluate_label_noise_robustness(
+                global_model, test_sets,
+                device=device, batch_size=batch_size,
+            )
+        return results
+
     def run(
         self,
         local_epochs: int = 2,
@@ -340,6 +449,7 @@ class FederatedSimulator:
             # This is cheap (only N_anchor steps forward) and runs before
             # aggregation so it reflects client-specific head weights.
             cd_spi_metrics: dict[str, float] = {}
+            func_divergence: dict[str, float] = {}
             if self.compute_cd_spi and len(client_updates) >= 2:
                 cd_spi_metrics = self._eval_cd_spi(device=device)
                 if cd_spi_metrics:
@@ -355,6 +465,14 @@ class FederatedSimulator:
                                 else step_text
                             )
                             tqdm.write(f"    {short}: {val:.4f}")
+
+                # Function-space divergence (complements parameter-space CD-SPI)
+                func_divergence = self._eval_function_space_divergence(device=device)
+                if func_divergence:
+                    tqdm.write(
+                        f"  [Func-div] output_cos={func_divergence.get('output_cosine_divergence', 0.0):.4f} "
+                        f"js={func_divergence.get('output_js_divergence', 0.0):.4f}"
+                    )
 
             per_domain: dict[str, float] = {}
 
@@ -408,10 +526,27 @@ class FederatedSimulator:
                     tqdm.write(f"  [Per-domain MSE] {domain_str}")
                 else:
                     tqdm.write(f"  [Per-domain MSE] skipped (eval_every={self.eval_every})")
-                    # Populate with NaN so JSONL shape stays consistent
                     for c in self.clients:
                         per_domain[f"client_{c.client_id}_mse"] = float("nan")
                     domain_str = "skipped"
+
+                # OOD cross-domain evaluation
+                ood_results: dict = {}
+                if self.eval_ood and (round_num + 1) % self.eval_every == 0:
+                    ood_results = self._eval_ood_cross_domain(
+                        device=device, batch_size=local_batch_size
+                    )
+                    if ood_results:
+                        tqdm.write(f"  [OOD Cross-domain] {ood_results}")
+
+                # Label noise robustness
+                label_noise_results: dict = {}
+                if self.eval_label_noise and (round_num + 1) % self.eval_every == 0:
+                    label_noise_results = self._eval_label_noise(
+                        device=device, batch_size=local_batch_size
+                    )
+                    if label_noise_results:
+                        tqdm.write(f"  [Label Noise] {label_noise_results}")
 
                 # Clean up validation copy and restore original model
                 self.server.global_model = original_model
@@ -447,6 +582,12 @@ class FederatedSimulator:
             }
             if cd_spi_metrics:
                 history_entry["cd_spi"] = cd_spi_metrics
+            if func_divergence:
+                history_entry["func_divergence"] = func_divergence
+            if ood_results:
+                history_entry["ood"] = ood_results
+            if label_noise_results:
+                history_entry["label_noise"] = label_noise_results
             self.history.append(history_entry)
 
             round_pbar.set_postfix(

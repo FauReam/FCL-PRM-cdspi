@@ -249,14 +249,24 @@ def main() -> None:
         )
         return
     attnres_config = config.get("model.attnres", None)
+    lora_config = config.get("model.lora", None)
+    partial_ft_layers = config.get("model.partial_ft_layers", 0)
+
     if attnres_config is not None:
         print(f"[INFO] Block AttnRes enabled: {attnres_config.get('num_blocks', 8)} blocks")
+    if lora_config is not None:
+        print(f"[INFO] LoRA enabled: r={lora_config.get('r', 8)}")
+    if partial_ft_layers > 0:
+        print(f"[INFO] Partial FT: last {partial_ft_layers} layers unfrozen")
+
     with tqdm(total=1, desc="Building global model", leave=False) as pbar:
         global_model = StepRewardModel(
             backbone=backbone,
             head_dim=config.get("model.prm_head_dim", 256),
             freeze_backbone=freeze_backbone,
             attnres=attnres_config,
+            lora_config=lora_config,
+            partial_ft_layers=partial_ft_layers,
         )
         pbar.update(1)
 
@@ -267,9 +277,20 @@ def main() -> None:
         global_model = torch.compile(global_model, mode=compile_mode)
         print(f"[INFO] model compiled with torch.compile ({compile_mode})")
 
-    mode = "head-only" if freeze_backbone else "full-parameter"
-    extra = " + AttnRes" if attnres_config is not None else ""
-    print(f"[INFO] Training mode: {mode}{extra} ({load_dtype})")
+    # Human-readable training mode summary
+    parts = []
+    if lora_config is not None:
+        parts.append(f"LoRA(r={lora_config.get('r', 8)})")
+    elif partial_ft_layers > 0:
+        parts.append(f"partial-FT(last {partial_ft_layers})")
+    elif freeze_backbone:
+        parts.append("head-only")
+    else:
+        parts.append("full-parameter")
+    if attnres_config is not None:
+        parts.append("AttnRes")
+    mode = " + ".join(parts)
+    print(f"[INFO] Training mode: {mode} ({load_dtype})")
 
     # Resume from latest checkpoint if available
     checkpoint_dir = config.get("logging.checkpoint_dir", "./checkpoints")
@@ -300,32 +321,28 @@ def main() -> None:
         print("Please download VersaPRM data to the specified data_dir.")
         return
 
-    # Build step-level datasets for each client domain
+    # Build step-level datasets with configurable heterogeneity pattern
     num_clients = config.get("federated.num_clients", 4)
     domains = config.get("data.domains", ["math", "code", "medical", "general"])
     max_length = config.get("data.max_length", 512)
     samples_per_client = config.get("data.samples_per_client", 5000)
+    partition_pattern = config.get("data.partition", "domain")
 
-    client_data = []
-    anchor_candidates = []  # (domain, step_text) for Anchor-PRM selection
-    for i in tqdm(range(num_clients), desc="Clients", position=0, leave=True):
-        domain = domains[i % len(domains)]
+    # Tokenize all samples into a flat pool first (with domain annotation)
+    all_step_samples: list[dict] = []
+    anchor_candidates: list[tuple[str, str]] = []
+    for domain in tqdm(domains, desc="Loading domains", position=0, leave=True):
         domain_samples = versa_loader.load_domain(domain)
-
-        # Tokenize steps with progress bar
-        step_samples = []
-        sample_iter = domain_samples[:samples_per_client]
         for sample in tqdm(
-            sample_iter,
+            domain_samples[:samples_per_client],
             desc=f"  Tokenizing {domain}",
-            total=len(sample_iter),
+            total=min(len(domain_samples), samples_per_client),
             position=1,
             leave=False,
         ):
             question = sample.get("question", "")
             steps = sample.get("steps", [])
             labels = sample.get("labels", [])
-
             if len(steps) != len(labels):
                 raise ValueError(
                     f"steps/labels length mismatch in domain '{domain}': "
@@ -333,25 +350,46 @@ def main() -> None:
                 )
             for step_text, label in zip(steps, labels):
                 text = f"{question}\n{step_text}"
-                # Collect raw text for anchor step selection (Anchor-PRM only)
                 anchor_candidates.append((domain, text))
                 encoded = tokenizer(
-                    text,
-                    padding=False,
-                    truncation=True,
-                    max_length=max_length,
-                    return_tensors=None,
+                    text, padding=False, truncation=True,
+                    max_length=max_length, return_tensors=None,
                 )
-                step_samples.append(
-                    {
-                        "input_ids": torch.tensor(encoded["input_ids"]),
-                        "attention_mask": torch.tensor(encoded["attention_mask"]),
-                        "label": float(label),
-                    }
-                )
+                all_step_samples.append({
+                    "input_ids": torch.tensor(encoded["input_ids"]),
+                    "attention_mask": torch.tensor(encoded["attention_mask"]),
+                    "label": float(label),
+                    "domain": domain,
+                })
 
-        client_data.append(step_samples)
-        tqdm.write(f"  Client {i} ({domain}): {len(step_samples)} step samples")
+    # Partition across clients according to heterogeneity pattern
+    if partition_pattern == "domain":
+        # Default: domain-split (most favourable to head-only)
+        by_domain: dict[str, list[dict]] = defaultdict(list)
+        for s in all_step_samples:
+            by_domain[s.get("domain", "general")].append(s)
+        client_data = []
+        for i in range(num_clients):
+            domain = domains[i % len(domains)]
+            client_data.append(by_domain.get(domain, []))
+            tqdm.write(f"  Client {i} ({domain}): {len(client_data[-1])} step samples")
+    else:
+        from fclprm.data.heterogeneity import get_partition_fn
+        partition_fn = get_partition_fn(
+            pattern=partition_pattern,
+            num_clients=num_clients,
+            domains=domains,
+            alpha=config.get("data.dirichlet_alpha", 0.5),
+            shift_strength=config.get("data.label_shift_strength", 0.3),
+            seed=config.get("experiment.seed", 42),
+        )
+        client_data = partition_fn(all_step_samples)
+        for i, data in enumerate(client_data):
+            tqdm.write(f"  Client {i} ({partition_pattern}): {len(data)} step samples")
+
+    if partition_pattern != "domain":
+        print(f"  [Non-IID] Partition pattern: {partition_pattern} "
+              f"(beyond domain-split baseline)")
 
     print(f"[{config.get('experiment.milestone')}] Starting federated simulation")
     print(f"  Rounds: {config.get('federated.num_rounds')}")
@@ -446,6 +484,12 @@ def main() -> None:
             f"  DP-SGD: enabled (epsilon={dp_epsilon}, delta={dp_delta}, max_grad_norm={dp_max_grad_norm})"
         )
 
+    # OOD evaluation configuration
+    eval_ood = config.get("evaluation.ood.enabled", False)
+    ood_domains = domains if eval_ood else None
+    eval_label_noise = config.get("evaluation.label_noise.enabled", False)
+    label_noise_ratios = config.get("evaluation.label_noise.ratios", [0.0, 0.1, 0.2])
+
     simulator = FederatedSimulator(
         num_clients=num_clients,
         num_rounds=config.get("federated.num_rounds", 50),
@@ -462,6 +506,10 @@ def main() -> None:
         eval_every=config.get("evaluation.eval_every", 1),
         participation_rate=config.get("federated.participation_rate", 1.0),
         skip_eval=config.get("evaluation.skip_eval", False),
+        eval_ood=eval_ood,
+        ood_domains=ood_domains,
+        eval_label_noise=eval_label_noise,
+        label_noise_ratios=label_noise_ratios,
     )
 
     save_every = config.get("logging.save_every", 10)

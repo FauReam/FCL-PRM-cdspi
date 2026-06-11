@@ -1,7 +1,10 @@
 """LLM backbone wrapper with frozen weights + trainable PRM head.
 
-Supports standard residual connections and Block Attention Residuals
-(AttnRes, Kimi Team arXiv:2603.15031, 2026).
+Supports:
+  - Standard residual connections and Block Attention Residuals
+    (AttnRes, Kimi Team arXiv:2603.15031, 2026).
+  - LoRA (Low-Rank Adaptation) via peft for parameter-efficient FT.
+  - Partial FT (last-N-layers) for capacity-continuum baselines.
 """
 
 import logging
@@ -16,22 +19,35 @@ from fclprm.models.prm_head import PRMHead
 
 logger = logging.getLogger(__name__)
 
+# Number of trainable parameters (informational only)
+_TRAINABLE_PARAMS: dict[str, int] = {}
+
+
+def _count_trainable(module: nn.Module, label: str) -> int:
+    n = sum(p.numel() for p in module.parameters() if p.requires_grad)
+    _TRAINABLE_PARAMS[label] = n
+    return n
+
+
+def get_trainable_param_count(label: str) -> int:
+    return _TRAINABLE_PARAMS.get(label, 0)
+
 
 class StepRewardModel(nn.Module):
-    """Wrapper: frozen or trainable LLM backbone + trainable PRM head.
+    """Wrapper: backbone (vanilla / AttnRes / LoRA / partial-FT) + PRM head.
 
     Forward pass:
         step_tokens -> backbone(last_hidden_state) -> last-non-PAD token -> PRMHead -> reward
 
-    When freeze_backbone=True (default), only the PRMHead (256-dim MLP) is trained.
-    When freeze_backbone=False, both backbone and head are fine-tuned end-to-end.
-    The latter requires ~21 GB memory on Pythia-1.4B (BF16+Adam), feasible only
-    on unified-memory devices like NVIDIA GB10.
+    Training modes (mutually informative, not mutually exclusive):
+      - head-only:          freeze_backbone=True  (256-dim MLP only)
+      - LoRA:               lora_config={r, alpha, ...}  (low-rank adapter)
+      - partial-FT:         partial_ft_layers=N  (unfreeze last N layers)
+      - full-FT:            freeze_backbone=False  (all backbone + head)
+      - full-FT + AttnRes:  freeze_backbone=False, attnres={...}
 
-    When attnres is enabled, the backbone's standard residual connections are
-    replaced with Block Attention Residuals (AttnRes), which uses learned
-    softmax attention over block-level layer representations for selective
-    depth-wise information retrieval.
+    The capacity continuum enables fair comparison across the parameter-efficiency
+    spectrum, rebutting the "false dichotomy" critique identified by the expert panel.
     """
 
     def __init__(
@@ -40,6 +56,8 @@ class StepRewardModel(nn.Module):
         head_dim: int = 256,
         freeze_backbone: bool = True,
         attnres: Optional[dict] = None,
+        lora_config: Optional[dict] = None,
+        partial_ft_layers: int = 0,
     ) -> None:
         """Initialize wrapper.
 
@@ -48,15 +66,29 @@ class StepRewardModel(nn.Module):
                 When attnres is enabled, this is wrapped in AttnResBackboneModel.
             head_dim: PRM head intermediate dimension.
             freeze_backbone: If True, backbone params are frozen (head-only FT);
-                if False, full-parameter fine-tuning.
+                if False, full-parameter fine-tuning. Overridden by lora_config
+                and partial_ft_layers for finer-grained control.
             attnres: Optional dict with AttnRes configuration:
                 - num_blocks (int): Number of AttnRes blocks, default 8.
                 - zero_init (bool): Init pseudo-queries to zero, default True.
-                If None (default), standard residuals are used.
+                If None, standard residuals are used.
+            lora_config: Optional dict for PEFT LoRA configuration:
+                - r (int): LoRA rank, default 8.
+                - alpha (int): LoRA alpha, default 16.
+                - dropout (float): LoRA dropout, default 0.05.
+                - target_modules (list[str]): Module name patterns to apply LoRA.
+                  Default: ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"].
+                If None, LoRA is not applied.
+            partial_ft_layers: Number of final transformer layers to unfreeze.
+                0 means no partial unfreezing. When >0 and freeze_backbone=True,
+                the last N layers are unfrozen while earlier layers stay frozen.
         """
         super().__init__()
         self.freeze_backbone = freeze_backbone
         self.attnres_config = attnres
+        self.lora_config = lora_config
+        self.partial_ft_layers = partial_ft_layers
+        self._lora_applied = False
 
         # Wrap backbone with AttnRes if enabled
         if attnres is not None:
@@ -75,12 +107,109 @@ class StepRewardModel(nn.Module):
         else:
             self.backbone = backbone
 
-        if freeze_backbone:
+        # --- LoRA: apply PEFT adapters to backbone ---
+        if lora_config is not None:
+            self._apply_lora(lora_config)
+
+        # --- Partial FT: unfreeze last N layers ---
+        if partial_ft_layers > 0:
+            self._apply_partial_ft(partial_ft_layers)
+
+        # --- Freeze logic ---
+        # If LoRA is applied, peft handles freezing non-adapter params.
+        # If partial_ft_layers > 0, those layers were already unfrozen above.
+        # Otherwise, apply the global freeze_backbone flag.
+        if freeze_backbone and not self._lora_applied and partial_ft_layers == 0:
             for param in self.backbone.parameters():
                 param.requires_grad = False
+
         self.head = PRMHead(
             hidden_dim=backbone.config.hidden_size,
             head_dim=head_dim,
+        )
+
+        _count_trainable(self, "total")
+        n_backbone = sum(
+            p.numel() for p in self.backbone.parameters() if p.requires_grad
+        )
+        n_head = sum(p.numel() for p in self.head.parameters() if p.requires_grad)
+        logger.info(
+            f"[StepRewardModel] Trainable params: {n_backbone:,} backbone + "
+            f"{n_head:,} head = {n_backbone + n_head:,} total"
+        )
+
+    def _apply_lora(self, cfg: dict) -> None:
+        """Apply LoRA adapters to the backbone via peft."""
+        try:
+            from peft import LoraConfig, get_peft_model, TaskType
+        except ImportError:
+            raise ImportError(
+                "peft is required for LoRA training. Install via `pip install peft`."
+            )
+
+        r = cfg.get("r", 8)
+        alpha = cfg.get("alpha", 16)
+        dropout = cfg.get("dropout", 0.05)
+        target_modules = cfg.get(
+            "target_modules",
+            ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"],
+        )
+
+        # When AttnRes is active, the backbone is wrapped in AttnResBackboneModel.
+        # LoRA must be applied to the inner backbone (HF model), not the wrapper.
+        inner = self.backbone.backbone if self.attnres_config is not None else self.backbone
+
+        peft_config = LoraConfig(
+            task_type=TaskType.FEATURE_EXTRACTION,
+            r=r,
+            lora_alpha=alpha,
+            lora_dropout=dropout,
+            target_modules=target_modules,
+        )
+        lora_backbone = get_peft_model(inner, peft_config)
+
+        if self.attnres_config is not None:
+            self.backbone.backbone = lora_backbone
+        else:
+            self.backbone = lora_backbone
+
+        self._lora_applied = True
+        logger.info(
+            f"[StepRewardModel] LoRA applied: r={r}, alpha={alpha}, "
+            f"target_modules={target_modules}"
+        )
+
+    def _apply_partial_ft(self, n_layers: int) -> None:
+        """Unfreeze the last n_layers transformer layers.
+
+        The target for layer access is the inner HF backbone when AttnRes is
+        active, otherwise self.backbone directly.
+        """
+        inner = self.backbone.backbone if self.attnres_config is not None else self.backbone
+
+        if not hasattr(inner, "layers") and hasattr(inner, "gpt_neox"):
+            layers = inner.gpt_neox.layers
+        elif hasattr(inner, "model") and hasattr(inner.model, "layers"):
+            layers = inner.model.layers
+        elif hasattr(inner, "layers"):
+            layers = inner.layers
+        else:
+            logger.warning(
+                "[StepRewardModel] Cannot identify transformer layers for partial FT; "
+                "skipping."
+            )
+            return
+
+        total_layers = len(layers)
+        n_unfreeze = min(n_layers, total_layers)
+        start_idx = total_layers - n_unfreeze
+
+        for i, layer in enumerate(layers):
+            for param in layer.parameters():
+                param.requires_grad = (i >= start_idx)
+
+        logger.info(
+            f"[StepRewardModel] Partial FT: unfroze last {n_unfreeze}/{total_layers} layers"
         )
 
     @staticmethod

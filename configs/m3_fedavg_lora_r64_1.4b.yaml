@@ -1,0 +1,58 @@
+# M3-LoRA: FedAvg LoRA(r=64) — Pythia-1.4B (parameter-efficiency baseline)
+# r=64 provides substantially more adapter capacity than r=8.
+# This mid-range rank tests whether LoRA can recover most of full-FT's
+# performance without training the full parameter set.
+
+experiment:
+  name: "m3_fedavg_lora_r64_1.4b"
+  milestone: "M3-lora"
+  description: "FedAvg LoRA(r=64) PRM: Pythia-1.4B, 4 clients, 25 rounds"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  hidden_dim: 2048
+  num_layers: 24
+  freeze_backbone: true
+  prm_head_dim: 256
+  lora:
+    r: 64
+    alpha: 128
+    dropout: 0.05
+    target_modules: ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"]
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 5000
+  max_length: 256
+
+federated:
+  num_clients: 4
+  num_rounds: 25
+  local_epochs: 1
+  local_batch_size: 4
+  local_learning_rate: 5.0e-6
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 5
+
+evaluation:
+  eval_every: 1
+  eval_split: "val"
+  compute_cd_spi: true
+
+logging:
+  log_dir: "./experiments/M3_lora_r64_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M3_lora_r64_1.4b/results/checkpoints"
+  save_every: 5
+
+hardware:
+  device: "cuda"
+  num_workers: 0

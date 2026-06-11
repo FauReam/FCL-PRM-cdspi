@@ -4,26 +4,41 @@
 Federated Continual Process Reward Model (联邦持续过程奖励模型)。
 跨机构联邦学习协同训练 step-level PRM。
 
-**当前方向：联邦全参数微调**（详见 PROJECT_FRAMEWORK.md）：
-- 旧方向（Anchor-PRM / permutation rebasin）在 RTX 4070 上得出阴性结论，已停止
-- 核心假设：head-only PRM 容量不足是联邦 PRM 的根本瓶颈，
-  全参数微调在本设备（NVIDIA GB10，121GB 统一内存）上可首次实现
+**当前方向：容量连续谱 + CD-SPI 诊断框架**（详见 PROJECT_FRAMEWORK.md）：
+- 旧方向 1（Anchor-PRM / permutation rebasin）在 RTX 4070 上得出阴性结论，已停止
+- 旧方向 2（vanilla full-FT vs head-only）受 expert panel 评审后重构叙事
+- **v3 核心贡献**：CD-SPI 诊断框架揭示联邦聚合中被忽视的信号结构维度；
+  full-FT 在 dense backbone + FedAvg 受控基线下存在可证明的容量优势（充分性证明，非必要性主张）
+- 设备：NVIDIA GB10，121GB 统一内存，ARM64 CPU
+
+## Scope boundary（明确声明）
+本文结论限于 **dense backbone + FedAvg 基线**。不主张 full FT 是联邦 PRM 的唯一路径；
+LoRA、AttnRes、MoE、SCAFFOLD 等方法可能提供替代容量路径，属于正交或互补方向。
 
 ## 模型选择
 - **主实验**: Pythia-2.8B 全参数 FT (~40 GB peak)
-- **辅助 1**: Pythia-1.4B 全参数 FT (~21 GB peak, scale trendline)
+- **辅助 1**: Pythia-1.4B + 容量连续谱 (head-only / LoRA r=8,64,256 / partial-FT / full-FT)
 - **辅助 2**: LLaMA-3.1-8B head-only (~16 GB, cross-architecture validation)
 
 ## 常用命令
 ```bash
-# 阶段 1：集中式锚点
+# 阶段 1：集中式锚点（vanilla full-FT）
 python scripts/train_centralized_prm.py --config configs/m2_centralized_full_2.8b.yaml
 python scripts/train_centralized_prm.py --config configs/m2_centralized_full_1.4b.yaml
 
-# 阶段 2：联邦全参数微调
+# 阶段 2：联邦容量连续谱实验
 python scripts/run_federated.py --config configs/m3_fedavg_full_2.8b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_head_llama_8b.yaml
+
+# LoRA 容量连续谱（expert panel P0 需求）
+python scripts/run_federated.py --config configs/m3_fedavg_lora_r8_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_lora_r64_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_lora_r256_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_partialft_1.4b.yaml
+
+# AttnRes backbone
+python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b_attnres.yaml
 
 # 附加实验：AttnRes backbone（可选，不影响主线）
 python scripts/train_centralized_prm.py --config configs/m2_centralized_full_1.4b_attnres.yaml
@@ -36,9 +51,15 @@ python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b_attnres.yam
 - 客户端训练：`src/fclprm/federated/client.py`
 - 服务器聚合：`src/fclprm/federated/server.py` / `aggregators.py`
 - 模拟调度：`src/fclprm/federated/simulator.py`
-- 模型定义：`src/fclprm/models/base_wrapper.py`
+- 模型定义：`src/fclprm/models/base_wrapper.py` (支持 LoRA/partial-FT/AttnRes)
 - **AttnRes backbone**：`src/fclprm/models/attnres_backbone.py`
 - 配置目录：`configs/`
+- 度量：
+  - `src/fclprm/metrics/cd_spi.py` — CD-SPI 核心
+  - `src/fclprm/metrics/cd_spi_stats.py` — permutation test, noise ablation, function-space divergence
+  - `src/fclprm/metrics/ood_eval.py` — OOD cross-domain, label perturbation
+- 数据分区：
+  - `src/fclprm/data/heterogeneity.py` — Dirichlet, label shift, mixed patterns
 
 ## 硬件信息
 - GPU: NVIDIA GB10 (Blackwell, 计算能力 12.1, CUDA 13.0)
