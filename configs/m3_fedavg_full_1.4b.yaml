@@ -1,12 +1,12 @@
-# M3: FedAvg full-parameter fine-tuning
-# 4 clients, Pythia 1.4B, all backbone params trainable
-# This is the core experiment: does full-parameter FT beat head-only FedAvg?
-# Requires NVIDIA GB10 (~21 GB peak) or equivalent unified-memory device.
+# M3: FedAvg full-parameter FT — Pythia-1.4B (auxiliary)
+# Smaller-scale counterpart to the 2.8B main experiment.
+# Forms the scale trendline: 1.4B → 2.8B.
+# Requires NVIDIA GB10 (~21 GB peak).
 
 experiment:
-  name: "m3_fedavg_full_pythia_1b"
+  name: "m3_fedavg_full_1.4b"
   milestone: "M3"
-  description: "FedAvg full-parameter FT: Pythia 1.4B, 4 clients, 50 rounds"
+  description: "FedAvg full-parameter FT: Pythia-1.4B, 4 clients, 25 rounds"
   seed: 42
 
 model:
@@ -41,8 +41,8 @@ evaluation:
   eval_split: "val"
 
 logging:
-  log_dir: "./experiments/M3_fedavg_full_prm/results/logs"
-  checkpoint_dir: "./experiments/M3_fedavg_full_prm/results/checkpoints"
+  log_dir: "./experiments/M3_fedavg_full_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M3_fedavg_full_1.4b/results/checkpoints"
   save_every: 5
 
 hardware:

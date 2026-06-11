@@ -1,0 +1,50 @@
+# M3: FedAvg head-only — LLaMA-3.1-8B (cross-architecture validation)
+# Head-only on LLaMA-3.1-8B to verify that the head-only limitation
+# generalizes beyond the Pythia architecture family.
+# Full FT on 8B is not feasible on GB10 (~105 GB); head-only runs easily.
+
+experiment:
+  name: "m3_fedavg_head_llama_8b"
+  milestone: "M3"
+  description: "FedAvg head-only: LLaMA-3.1-8B, 4 clients, 25 rounds"
+  seed: 42
+
+model:
+  backbone: "meta-llama/Llama-3.1-8B"
+  prm_head_dim: 256
+  freeze_backbone: true
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 5000
+  max_length: 256
+
+federated:
+  num_clients: 4
+  num_rounds: 25
+  local_epochs: 2
+  local_batch_size: 8
+  local_learning_rate: 1.0e-4
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 5
+
+evaluation:
+  eval_every: 5
+  eval_split: "val"
+
+logging:
+  log_dir: "./experiments/M3_fedavg_head_llama_8b/results/logs"
+  checkpoint_dir: "./experiments/M3_fedavg_head_llama_8b/results/checkpoints"
+  save_every: 10
+
+hardware:
+  device: "cuda"
+  num_workers: 0

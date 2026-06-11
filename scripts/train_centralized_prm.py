@@ -114,11 +114,13 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    freeze_backbone = config.get("model.freeze_backbone", True)
+    load_dtype = torch.bfloat16 if device == "cuda" else torch.float32
     try:
         backbone = _load_hf_asset(
             AutoModel.from_pretrained,
             config.get("model.backbone"),
-            dtype=torch.float32,
+            dtype=load_dtype,
         )
     except OSError as e:
         print(f"[ERROR] Failed to load backbone for '{config.get('model.backbone')}'.")
@@ -131,11 +133,15 @@ def main() -> None:
     model = StepRewardModel(
         backbone=backbone,
         head_dim=config.get("model.prm_head_dim", 256),
+        freeze_backbone=freeze_backbone,
     )
     model.to(device)
 
+    mode = "head-only" if freeze_backbone else "full-parameter"
+    print(f"[M2] Training mode: {mode} ({load_dtype})")
+
     if device.type == "cuda" and hasattr(torch, "compile") and sys.platform != "win32":
-        print("[M2] Enabling torch.compile for faster training on RTX 4070...")
+        print("[M2] Enabling torch.compile for faster training...")
         model = torch.compile(model, mode="max-autotune")
     elif device.type == "cuda" and sys.platform == "win32":
         print("[M2] Skipping torch.compile on Windows (Triton unavailable).")
