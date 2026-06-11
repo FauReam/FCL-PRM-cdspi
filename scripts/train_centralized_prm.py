@@ -130,15 +130,20 @@ def main() -> None:
             "  or download the model locally and set local_files_only=True in config."
         )
         return
+    attnres_config = config.get("model.attnres", None)
+    if attnres_config is not None:
+        print(f"[M2] Block AttnRes enabled: {attnres_config.get('num_blocks', 8)} blocks")
     model = StepRewardModel(
         backbone=backbone,
         head_dim=config.get("model.prm_head_dim", 256),
         freeze_backbone=freeze_backbone,
+        attnres=attnres_config,
     )
     model.to(device)
 
     mode = "head-only" if freeze_backbone else "full-parameter"
-    print(f"[M2] Training mode: {mode} ({load_dtype})")
+    extra = " + AttnRes" if attnres_config is not None else ""
+    print(f"[M2] Training mode: {mode}{extra} ({load_dtype})")
 
     if device.type == "cuda" and hasattr(torch, "compile") and sys.platform != "win32":
         print("[M2] Enabling torch.compile for faster training...")

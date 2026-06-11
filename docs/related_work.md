@@ -1,7 +1,7 @@
 # Related Work
 
 > Comprehensive literature review for FCL-PRM.
-> Last updated: 2026-05-05.
+> Last updated: 2026-06-11.
 
 ---
 
@@ -159,6 +159,60 @@ FCL-PRM addresses all three gaps through: (i) Anchor-PRM aggregation with embedd
 
 ---
 
+## 8. DeepSeek MoE: Sparse Architecture for Efficient Scaling
+
+### 8.1 Architectural Innovations
+
+**DeepSeekMoE** (Dai et al., ACL 2024) introduces two foundational innovations over traditional MoE architectures like GShard (Lepikhin et al., 2021):
+
+**Fine-Grained Expert Segmentation**: Standard MoE uses a small number of large experts (8–16). DeepSeek splits each FFN expert's intermediate hidden dimension into 1/m, creating m sub-experts per original expert. With N=16 split by m=4, routing combinations explode from C(16,2)=120 to C(64,8)≈4.4 billion. This allows activating more experts per token at constant compute, dramatically increasing the model's routing flexibility.
+
+**Shared Expert Isolation**: A set of K_s experts are always activated for every token, capturing common knowledge (syntax, grammar patterns) that would otherwise be redundantly learned by multiple routed experts. The remaining routed experts specialize in distinct, non-overlapping knowledge domains. The architecture maintains a 1:3 shared-to-activated-routed ratio at scale (e.g., 2 shared / 6 activated for 16B; 4 shared / 12 activated for 145B).
+
+### 8.2 Loss-Free Balancing (Key Innovation over GShard)
+
+DeepSeek's **Loss-Free Balancing** (Wang et al., 2024) replaces traditional auxiliary-loss-based load balancing by adding expert-wise biases to routing scores before top-K selection:
+
+```
+b_i := b_i + γ · sign(avg_load - load_i)
+```
+
+Key advantages:
+- **Zero interference gradients**: biases are updated manually with `requires_grad=False`, so the main training objective produces no gradient interference from load-balancing pressure
+- **Better perplexity**: 9.50 vs 9.56 (1B scale); 7.92 vs 7.97 (3B scale) compared to auxiliary-loss methods
+- **Superior load balance**: MaxVio_global 0.04 vs 0.52–0.72
+
+The procedure has been formally cast as a one-step-per-iteration primal-dual method for an assignment problem (Han & Zhong, NeurIPS 2025).
+
+### 8.3 Relevance to Federated PRM
+
+DeepSeek MoE is architecturally orthogonal to FCL-PRM but intersects on several dimensions:
+
+| Dimension | DeepSeek MoE Insight | Implication for FCL-PRM |
+|-----------|---------------------|------------------------|
+| **Expert specialization** | Each routed expert learns distinct knowledge domains | Parallels our CD-SPI question: do federated clients learn specialized step representations? |
+| **Loss-Free Balancing** | Bias-based load balancing without gradient interference | Could inspire gradient-free aggregation strategies for heterogeneous FL clients |
+| **Sparse activation** | 37B/671B active parameters per token | MoE backbone could reduce per-client memory in federated settings, enabling larger base models |
+| **Routing suboptimality** | 10–20% gap between actual and optimal routing (RoMA, ICLR 2026) | Suggests that full-parameter fine-tuning in MoE should monitor routing specialization to avoid degradation |
+
+### 8.4 MoE Post-Training: Contrast with FullFT
+
+Current MoE post-training literature reveals a tension with the full-parameter fine-tuning approach:
+
+- **RoMA** (ICLR 2026): Identifies 10–20% routing suboptimality across MoE models (OLMoE, DeepSeekMoE, Qwen3). Proposes manifold regularization that fine-tunes only routers (0.0095% of parameters), freezing all expert weights. Achieving strong results with minimal parameter change — in direct contrast to full-parameter FT.
+
+- **MoE-DPO** (Stony Brook & Bloomberg, 2025): First principled extension of Direct Preference Optimization to MoE architectures via stochastic variational inference. Defines a Mixture-of-Bradley-Terry (MBT) likelihood that models expert-dependent reward functions, providing a theoretical bridge between preference alignment and MoE routing.
+
+- **CDSP-MoE** (2025): Uses gradient conflict (negative cosine similarity in shared parameter subspaces) as a structural signal to prune conflicting expert pathways. Conceptually related to our CD-SPI metric — both measure divergence in representation subspaces, though at different granularities (expert pathways vs. step embeddings).
+
+### 8.5 Limitations and Open Questions
+
+- No existing work combines contrastive learning or process reward modeling with DeepSeek's MoE architecture — all PRM-specific methods (CPMI, CARFT) are tested only on dense models
+- Full-parameter fine-tuning of 671B MoE models presents prohibitive communication costs in federated settings — the full FT assumption of FCL-PRM may need re-examination for MoE-scale backbones
+- Loss-Free Balancing results are self-reported by DeepSeek-AI with no independent replication published at time of writing
+
+---
+
 ## References
 
 - Abadi et al. "Deep Learning with Differential Privacy." CCS 2016.
@@ -185,3 +239,12 @@ FCL-PRM addresses all three gaps through: (i) Anchor-PRM aggregation with embedd
 - Zhao et al. "Federated Learning with Non-IID Data." 2018.
 - Zhang et al. "FedGMKD: An Efficient Prototype Federated Learning Framework through Knowledge Distillation and Discrepancy-Aware Aggregation." NeurIPS 2024.
 - Zhu et al. "Deep Leakage from Gradients." NeurIPS 2019.
+- Dai et al. "DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models." ACL 2024. [arXiv:2401.06066](https://arxiv.org/abs/2401.06066)
+- DeepSeek-AI. "DeepSeek-V3 Technical Report." 2024. [arXiv:2412.19437](https://arxiv.org/abs/2412.19437)
+- Wang et al. "Loss-Free Balancing." 2024. [arXiv:2408.15664](https://arxiv.org/abs/2408.15664)
+- Han & Zhong. "Primal-Dual Analysis of Loss-Free Balancing." NeurIPS 2025. [arXiv:2512.03915](https://arxiv.org/abs/2512.03915)
+- Yoon. "Counterfactual Routing Analysis in MoE." 2026. [arXiv:2605.07260](https://arxiv.org/abs/2605.07260)
+- RoMA (Routing Manifold Alignment). ICLR 2026. [arXiv:2511.07419](https://arxiv.org/abs/2511.07419)
+- MoE-DPO. 2025. [arXiv:2510.08256](https://arxiv.org/abs/2510.08256)
+- CDSP-MoE. 2025. [arXiv:2512.20291](https://arxiv.org/abs/2512.20291)
+- CPMI: Contrastive PRM Training. ACL 2026. [arXiv:2604.10660](https://arxiv.org/abs/2604.10660)

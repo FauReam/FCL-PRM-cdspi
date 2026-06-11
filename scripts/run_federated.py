@@ -248,19 +248,28 @@ def main() -> None:
             "  or download the model locally and set local_files_only=True in config."
         )
         return
-    # torch.compile speeds up forward passes for both frozen and trainable backbones.
-    if device == "cuda":
-        backbone = torch.compile(backbone, mode="reduce-overhead")
-        print("[INFO] backbone compiled with torch.compile (reduce-overhead)")
+    attnres_config = config.get("model.attnres", None)
+    if attnres_config is not None:
+        print(f"[INFO] Block AttnRes enabled: {attnres_config.get('num_blocks', 8)} blocks")
     with tqdm(total=1, desc="Building global model", leave=False) as pbar:
         global_model = StepRewardModel(
             backbone=backbone,
             head_dim=config.get("model.prm_head_dim", 256),
             freeze_backbone=freeze_backbone,
+            attnres=attnres_config,
         )
         pbar.update(1)
+
+    # torch.compile speeds up forward passes.
+    # When AttnRes is enabled, compile the entire model after AttnRes wrapping.
+    if device == "cuda":
+        compile_mode = "reduce-overhead"
+        global_model = torch.compile(global_model, mode=compile_mode)
+        print(f"[INFO] model compiled with torch.compile ({compile_mode})")
+
     mode = "head-only" if freeze_backbone else "full-parameter"
-    print(f"[INFO] Training mode: {mode} ({load_dtype})")
+    extra = " + AttnRes" if attnres_config is not None else ""
+    print(f"[INFO] Training mode: {mode}{extra} ({load_dtype})")
 
     # Resume from latest checkpoint if available
     checkpoint_dir = config.get("logging.checkpoint_dir", "./checkpoints")

@@ -1,0 +1,62 @@
+# M3-AttnRes: FedAvg full-parameter FT with Block AttnRes — Pythia-1.4B
+# Block AttnRes replaces standard residuals with learned cross-block attention.
+# Reference: "Attention Residuals" (arXiv:2603.15031, Kimi Team, 2026)
+#
+# Core hypothesis: AttnRes's improved depth-wise gradient distribution
+# reduces client drift in federated full-parameter FT, yielding closer-
+# to-centralized performance under FedAvg.
+#
+# Requires NVIDIA GB10 (~21 GB peak + negligible AttnRes overhead).
+
+experiment:
+  name: "m3_fedavg_full_1.4b_attnres"
+  milestone: "M3"
+  description: "FedAvg full-parameter FT + Block AttnRes: Pythia-1.4B, 4 clients, 25 rounds"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  prm_head_dim: 256
+  freeze_backbone: false
+  # ---- Block Attention Residuals ----
+  # N=8 blocks for Pythia-1.4B (24 layers), 3 layers/block.
+  # Pseudo-queries are trained on each client and communicated via FedAvg,
+  # same as all other backbone parameters.
+  attnres:
+    num_blocks: 8
+    zero_init: true
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 5000
+  max_length: 256
+
+federated:
+  num_clients: 4
+  num_rounds: 25
+  local_epochs: 1
+  local_batch_size: 4
+  local_learning_rate: 5.0e-6
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 5
+
+evaluation:
+  eval_every: 1
+  eval_split: "val"
+
+logging:
+  log_dir: "./experiments/M3_fedavg_full_1.4b_attnres/results/logs"
+  checkpoint_dir: "./experiments/M3_fedavg_full_1.4b_attnres/results/checkpoints"
+  save_every: 5
+
+hardware:
+  device: "cuda"
+  num_workers: 0

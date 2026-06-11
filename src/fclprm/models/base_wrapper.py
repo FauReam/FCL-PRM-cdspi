@@ -1,10 +1,20 @@
-"""LLM backbone wrapper with frozen weights + trainable PRM head."""
+"""LLM backbone wrapper with frozen weights + trainable PRM head.
+
+Supports standard residual connections and Block Attention Residuals
+(AttnRes, Kimi Team arXiv:2603.15031, 2026).
+"""
+
+import logging
+from typing import Optional
 
 import torch
 import torch.nn as nn
 from transformers import PreTrainedModel
 
+from fclprm.models.attnres_backbone import AttnResBackboneModel
 from fclprm.models.prm_head import PRMHead
+
+logger = logging.getLogger(__name__)
 
 
 class StepRewardModel(nn.Module):
@@ -17,6 +27,11 @@ class StepRewardModel(nn.Module):
     When freeze_backbone=False, both backbone and head are fine-tuned end-to-end.
     The latter requires ~21 GB memory on Pythia-1.4B (BF16+Adam), feasible only
     on unified-memory devices like NVIDIA GB10.
+
+    When attnres is enabled, the backbone's standard residual connections are
+    replaced with Block Attention Residuals (AttnRes), which uses learned
+    softmax attention over block-level layer representations for selective
+    depth-wise information retrieval.
     """
 
     def __init__(
@@ -24,18 +39,42 @@ class StepRewardModel(nn.Module):
         backbone: PreTrainedModel,
         head_dim: int = 256,
         freeze_backbone: bool = True,
+        attnres: Optional[dict] = None,
     ) -> None:
         """Initialize wrapper.
 
         Args:
             backbone: Pre-trained LLM (e.g., Pythia 1.4B, LLaMA-3.1 8B).
+                When attnres is enabled, this is wrapped in AttnResBackboneModel.
             head_dim: PRM head intermediate dimension.
             freeze_backbone: If True, backbone params are frozen (head-only FT);
                 if False, full-parameter fine-tuning.
+            attnres: Optional dict with AttnRes configuration:
+                - num_blocks (int): Number of AttnRes blocks, default 8.
+                - zero_init (bool): Init pseudo-queries to zero, default True.
+                If None (default), standard residuals are used.
         """
         super().__init__()
-        self.backbone = backbone
         self.freeze_backbone = freeze_backbone
+        self.attnres_config = attnres
+
+        # Wrap backbone with AttnRes if enabled
+        if attnres is not None:
+            num_blocks = attnres.get("num_blocks", 8)
+            zero_init = attnres.get("zero_init", True)
+            logger.info(
+                f"[StepRewardModel] Enabling Block AttnRes: "
+                f"{num_blocks} blocks, zero_init={zero_init}, "
+                f"model={backbone.__class__.__name__}"
+            )
+            self.backbone = AttnResBackboneModel(
+                backbone=backbone,
+                num_blocks=num_blocks,
+                zero_init=zero_init,
+            )
+        else:
+            self.backbone = backbone
+
         if freeze_backbone:
             for param in self.backbone.parameters():
                 param.requires_grad = False
