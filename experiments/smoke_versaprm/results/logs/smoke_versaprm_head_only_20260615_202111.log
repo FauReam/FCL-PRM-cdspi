@@ -1,0 +1,6 @@
+[INFO] Logging mirrored to: experiments/smoke_versaprm/results/logs/smoke_versaprm_head_only_20260615_202111.log
+[SMOKE] Initializing model: EleutherAI/pythia-1.4b
+[INFO] Head activation: relu (default)
+[INFO] Skipping torch.compile (ARM64, Triton unavailable).
+[INFO] Training mode: head-only (torch.bfloat16)
+[SMOKE] Loading data from: ./data/versaprm

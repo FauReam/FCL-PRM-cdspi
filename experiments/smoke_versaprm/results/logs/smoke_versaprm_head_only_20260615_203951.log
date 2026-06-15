@@ -1,0 +1,50 @@
+[INFO] Logging mirrored to: experiments/smoke_versaprm/results/logs/smoke_versaprm_head_only_20260615_203951.log
+[SMOKE] Initializing model: EleutherAI/pythia-1.4b
+[INFO] Head activation: relu (default)
+[INFO] Skipping torch.compile (ARM64, Triton unavailable).
+[INFO] Training mode: head-only (torch.bfloat16)
+[SMOKE] Loading data from: ./data/versaprm
+  Client 0 (math): 2030 step samples
+  Client 1 (code): 3611 step samples
+  Client 2 (medical): 1035 step samples
+  Client 3 (general): 1995 step samples
+[SMOKE] Starting federated simulation
+  Rounds: 3
+  Clients: 4
+  Aggregation: fedavg
+
+[Round 1/2] Starting
+  [GPU] allocated=0.00GB reserved=0.00GB
+  [Round 1] Client 0 training...
+  [Client 0] epoch 1/1 done | avg_loss=0.3358 lr=0.00e+00
+  [Round 1] Client 0 done | loss=0.3358 | batches=16 | time=209.128s | steps/s=0.08 | samples/s=9.79
+  [Round 1] Client 1 training...
+  [Client 1] epoch 1/1 done | avg_loss=0.2869 lr=0.00e+00
+  [Round 1] Client 1 done | loss=0.2869 | batches=29 | time=477.311s | steps/s=0.06 | samples/s=7.78
+  [Round 1] Client 2 training...
+  [Client 2] epoch 1/1 done | avg_loss=0.3025 lr=0.00e+00
+  [Round 1] Client 2 done | loss=0.3025 | batches=9 | time=119.459s | steps/s=0.08 | samples/s=9.64
+  [Round 1] Client 3 training...
+  [Client 3] epoch 1/1 done | avg_loss=0.2855 lr=0.00e+00
+  [Round 1] Client 3 done | loss=0.2855 | batches=16 | time=223.318s | steps/s=0.07 | samples/s=9.17
+  [Eval] skipped (train-only mode)
+[Round 1/2] Summary | avg_loss=0.3027 | time=1038.6s | steps/s=0.1 | samples/s=8.3
+
+[Round 2/2] Starting
+  [GPU] allocated=2.48GB reserved=5.00GB
+  [Round 2] Client 0 training...
+  [Client 0] epoch 1/1 done | avg_loss=0.3221 lr=0.00e+00
+  [Round 2] Client 0 done | loss=0.3221 | batches=16 | time=206.563s | steps/s=0.08 | samples/s=9.91
+  [Round 2] Client 1 training...
+  [Client 1] epoch 1/1 done | avg_loss=0.2485 lr=0.00e+00
+  [Round 2] Client 1 done | loss=0.2485 | batches=29 | time=477.846s | steps/s=0.06 | samples/s=7.77
+  [Round 2] Client 2 training...
+  [Client 2] epoch 1/1 done | avg_loss=0.2567 lr=0.00e+00
+  [Round 2] Client 2 done | loss=0.2567 | batches=9 | time=120.549s | steps/s=0.07 | samples/s=9.56
+  [Round 2] Client 3 training...
+  [Client 3] epoch 1/1 done | avg_loss=0.2764 lr=0.00e+00
+  [Round 2] Client 3 done | loss=0.2764 | batches=16 | time=221.248s | steps/s=0.07 | samples/s=9.26
+  [Eval] skipped (train-only mode)
+[Round 2/2] Summary | avg_loss=0.2759 | time=1029.2s | steps/s=0.1 | samples/s=8.4
+
+[Done] Total time: 2067.8s

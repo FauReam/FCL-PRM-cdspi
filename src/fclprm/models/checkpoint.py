@@ -45,7 +45,17 @@ def save_checkpoint(
 
     # Move state dict to CPU before saving to avoid GPU memory spike during I/O
     cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
-    cpu_optim = {k: v.cpu() for k, v in optimizer.state_dict().items()}
+
+    # optimizer.state_dict() returns nested structure:
+    #   {"state": {param_id: {tensor_name: tensor, ...}}, "param_groups": [{...}]}
+    # Only the leaf tensors inside "state" need .cpu().
+    raw_optim = optimizer.state_dict()
+    cpu_optim: dict = {"state": {}, "param_groups": raw_optim["param_groups"]}
+    for param_id, state_vals in raw_optim["state"].items():
+        cpu_optim["state"][param_id] = {
+            k: v.cpu() if isinstance(v, torch.Tensor) else v
+            for k, v in state_vals.items()
+        }
 
     checkpoint = {
         "model_state_dict": cpu_state,

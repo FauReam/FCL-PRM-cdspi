@@ -1,12 +1,15 @@
-# Smoke test: VersaPRM head-only centralized with large batch
+# Smoke test: VersaPRM head-only — minimal pipeline verification
 # Purpose: Verify pipeline works + confirm task is hard enough
 #   Expected accuracy < 95% (vs old PRM800K's 99.83%)
-# Run: python scripts/train_centralized_prm.py --config configs/smoke_versaprm.yaml
+#
+# Supports BOTH entry points:
+#   python scripts/train_centralized_prm.py --config configs/smoke_versaprm.yaml
+#   python scripts/run_federated.py --config configs/smoke_versaprm.yaml
 
 experiment:
   name: "smoke_versaprm_head_only"
   milestone: "SMOKE"
-  description: "Smoke test: head-only centralized on VersaPRM, batch=128"
+  description: "Smoke test: head-only on VersaPRM, minimal data, fast verification"
   seed: 42
 
 model:
@@ -18,7 +21,8 @@ data:
   dataset: "versaprm"
   data_dir: "./data/versaprm"
   domains: ["math", "code", "medical", "general"]
-  samples_per_domain: 200
+  samples_per_domain: 200       # used by train_centralized_prm.py
+  samples_per_client: 200       # used by run_federated.py
   max_length: 512
 
 training:
@@ -31,10 +35,19 @@ training:
   optimizer: "adamw"
   scheduler: "cosine"
 
+federated:
+  num_rounds: 3
+  local_epochs: 1
+  local_batch_size: 128
+  local_learning_rate: 1.0e-4
+  num_clients: 4
+  aggregation: "fedavg"
+
 evaluation:
   eval_every: 50
   eval_batch_size: 128
   metrics: ["accuracy", "f1", "auc"]
+  skip_eval: true               # smoke test: skip expensive per-domain eval
 
 logging:
   log_dir: "./experiments/smoke_versaprm/results/logs"

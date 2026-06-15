@@ -309,12 +309,35 @@ class StepRewardModel(nn.Module):
         Returns:
             Scalar rewards of shape (B,).
         """
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-            last_hidden = self._last_non_pad_hidden(
-                outputs.last_hidden_state, attention_mask
-            )
-        return self.head(last_hidden)
+        # Frozen backbone: skip autograd graph construction entirely.
+        # torch.no_grad() is faster than relying on requires_grad=False alone
+        # because it avoids registering backward hooks on every op.
+        backbone_needs_grad = (
+            not self.freeze_backbone
+            or self._lora_applied
+            or self.partial_ft_layers > 0
+        )
+        ctx = torch.no_grad() if not backbone_needs_grad else torch.enable_grad()
+        with ctx:
+            if backbone_needs_grad:
+                with torch.autocast(
+                    device_type="cuda", dtype=torch.bfloat16
+                ):
+                    outputs = self.backbone(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                    )
+            else:
+                outputs = self.backbone(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                )
+        last_hidden = self._last_non_pad_hidden(
+            outputs.last_hidden_state, attention_mask
+        )
+        # Head weights are fp32, backbone output is bf16.
+        # .float() cast is cheap (no copy needed if tensor is contiguous).
+        return self.head(last_hidden.float())
 
     def get_step_embedding(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor
@@ -391,8 +414,10 @@ class StepRewardModel(nn.Module):
             Post-ReLU head features of shape (B, head_dim).
         """
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
+            outputs = self.backbone(
+                input_ids=input_ids, attention_mask=attention_mask
+            )
             last_hidden = self._last_non_pad_hidden(
                 outputs.last_hidden_state, attention_mask
             )
-        return self.head.get_intermediate(last_hidden)
+        return self.head.get_intermediate(last_hidden.float())

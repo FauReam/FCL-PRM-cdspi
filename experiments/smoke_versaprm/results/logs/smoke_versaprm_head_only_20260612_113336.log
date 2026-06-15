@@ -1,0 +1,39 @@
+[INFO] Logging mirrored to: experiments/smoke_versaprm/results/logs/smoke_versaprm_head_only_20260612_113336.log
+[SMOKE] Initializing model: EleutherAI/pythia-1.4b
+[WARN] Hub unreachable (ConnectTimeout), falling back to local cache...
+[INFO] Head activation: relu (default)
+[INFO] Skipping torch.compile (ARM64, Triton unavailable).
+[INFO] Training mode: head-only (torch.bfloat16)
+[SMOKE] Loading data from: ./data/versaprm
+  Client 0 (math): 2030 step samples
+  Client 1 (code): 3611 step samples
+  Client 2 (medical): 1035 step samples
+  Client 3 (general): 1995 step samples
+[SMOKE] Starting federated simulation
+  Rounds: 3
+  Clients: 4
+  Aggregation: fedavg
+
+[Round 1/3] Starting
+  [GPU] allocated=0.00GB reserved=0.00GB
+  [Round 1] Client 0 training...
+  [Client 0] epoch 1/1 done | avg_loss=0.3358 lr=0.00e+00
+  [Round 1] Client 0 done | loss=0.3358 | batches=16 | time=209.19s | steps/s=0.08 | samples/s=9.79
+  [Round 1] Client 1 training...
+  [Client 1] epoch 1/1 done | avg_loss=0.2869 lr=0.00e+00
+  [Round 1] Client 1 done | loss=0.2869 | batches=29 | time=477.472s | steps/s=0.06 | samples/s=7.77
+  [Round 1] Client 2 training...
+  [Client 2] epoch 1/1 done | avg_loss=0.3025 lr=0.00e+00
+  [Round 1] Client 2 done | loss=0.3025 | batches=9 | time=119.238s | steps/s=0.08 | samples/s=9.66
+  [Round 1] Client 3 training...
+  [Client 3] epoch 1/1 done | avg_loss=0.2855 lr=0.00e+00
+  [Round 1] Client 3 done | loss=0.2855 | batches=16 | time=223.358s | steps/s=0.07 | samples/s=9.17
+  [Eval] skipped (train-only mode)
+[Round 1/3] Summary | avg_loss=0.3027 | time=1039.4s | steps/s=0.1 | samples/s=8.3
+
+[Round 2/3] Starting
+  [GPU] allocated=2.48GB reserved=5.00GB
+  [Round 2] Client 0 training...
+  [Client 0] epoch 1/1 done | avg_loss=0.3221 lr=0.00e+00
+  [Round 2] Client 0 done | loss=0.3221 | batches=16 | time=206.926s | steps/s=0.08 | samples/s=9.9
+  [Round 2] Client 1 training...

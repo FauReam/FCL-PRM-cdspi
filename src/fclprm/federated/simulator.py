@@ -1,6 +1,17 @@
-"""Single-machine multi-process federated simulation scheduler."""
+"""Single-machine multi-process federated simulation scheduler.
 
+Safety features:
+  - SIGINT handler: graceful shutdown on Ctrl+C (saves partial results)
+  - Auto-save history: per-round JSONL dump for crash recovery
+  - Per-client error isolation: one client crash logs error but continues
+  - Structured error logging: all exceptions captured with traceback
+"""
+
+import json
+import signal
+import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -41,6 +52,7 @@ class FederatedSimulator:
         eval_label_noise: bool = False,
         label_noise_ratios: list[float] | None = None,
         compute_symmetrical_cd_spi: bool = False,
+        work_dir: str | None = None,
     ) -> None:
         """Initialize simulator.
 
@@ -92,6 +104,17 @@ class FederatedSimulator:
         self.eval_label_noise = eval_label_noise
         self.label_noise_ratios = label_noise_ratios or [0.0, 0.1, 0.2]
         self.compute_symmetrical_cd_spi = compute_symmetrical_cd_spi
+        self.work_dir = work_dir
+        self._interrupted = False
+        self._current_round = 0
+        self._history_path: Path | None = None
+        self._crash_dir: Path | None = None
+        if work_dir:
+            wd = Path(work_dir)
+            wd.mkdir(parents=True, exist_ok=True)
+            self._history_path = wd / "history.json"
+            self._crash_dir = wd / "crashes"
+            self._crash_dir.mkdir(parents=True, exist_ok=True)
 
         if aggregation_rule == "anchor_prm" and anchor_inputs is None:
             raise ValueError(
@@ -412,6 +435,66 @@ class FederatedSimulator:
             )
         return results
 
+    # ── Safety: signal handler for graceful interrupt ──────────────────────
+
+    def _setup_signal_handler(self) -> None:
+        """Install SIGINT handler for graceful shutdown on Ctrl + C."""
+        from tqdm import tqdm
+        original = signal.getsignal(signal.SIGINT)
+
+        def _handler(sig, frame):
+            self._interrupted = True
+            tqdm.write("\n  [SIGNAL] SIGINT received -- finishing current round, then exiting...")
+            tqdm.write("  [SIGNAL] Press Ctrl + C again to force exit.")
+            signal.signal(signal.SIGINT, original)
+
+        signal.signal(signal.SIGINT, _handler)
+
+    def _save_history_snapshot(self) -> None:
+        """Save current history to disk for crash recovery."""
+        from tqdm import tqdm
+        if self._history_path is None or not self.history:
+            return
+        try:
+            tmp = self._history_path.with_suffix(".tmp.json")
+            with open(tmp, "w") as f:
+                def _convert(v):
+                    if isinstance(v, torch.Tensor):
+                        return v.item()
+                    if isinstance(v, dict):
+                        return {k: _convert(x) for k, x in v.items()}
+                    if isinstance(v, list):
+                        return [_convert(x) for x in v]
+                    return v
+                clean = [_convert(e) for e in self.history]
+                json.dump(clean, f, indent=2, ensure_ascii=False)
+            tmp.replace(self._history_path)
+        except Exception as e:
+            tqdm.write(f"  [WARN] Failed to save history snapshot: {e}")
+
+    def _save_crash_report(self, stage: str, error: Exception) -> None:
+        """Save structured crash report for debugging."""
+        from tqdm import tqdm
+        if self._crash_dir is None:
+            return
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            report = {
+                "timestamp": timestamp,
+                "stage": stage,
+                "round": self._current_round,
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+                "traceback": traceback.format_exc(),
+            }
+            log_path = self._crash_dir / f"crash_r{self._current_round}_{timestamp}.json"
+            with open(log_path, "w") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            tqdm.write(f"\n  [CRASH] {report['error_type']}: {report['error_message']}")
+            tqdm.write(f"  [CRASH] Report saved to: {log_path}")
+        except Exception as e2:
+            tqdm.write(f"  [CRASH] Failed to save crash report: {e2}")
+
     def run(
         self,
         local_epochs: int = 2,
@@ -455,6 +538,9 @@ class FederatedSimulator:
         rng = random.Random(self.seed)
         global_start = time.perf_counter()
 
+        # Install signal handler for graceful interrupt
+        self._setup_signal_handler()
+
         round_pbar = tqdm(
             range(start_round, self.num_rounds),
             desc="Rounds",
@@ -464,6 +550,13 @@ class FederatedSimulator:
             leave=True,
         )
         for round_num in round_pbar:
+            # Check interrupt flag (from SIGINT handler)
+            if self._interrupted:
+                tqdm.write(f"\n  [STOP] Interrupted at round {round_num}")
+                self._save_history_snapshot()
+                break
+
+            self._current_round = round_num
             round_start = time.perf_counter()
             tqdm.write(f"\n[Round {round_num + 1}/{self.num_rounds}] Starting")
             if device == "cuda":
@@ -494,19 +587,34 @@ class FederatedSimulator:
             round_losses = []
             total_client_steps = 0
             total_client_samples = 0
+            client_errors = []
             for client in active_clients:
+                if self._interrupted:
+                    break
                 tqdm.write(f"  [Round {round_num + 1}] Client {client.client_id} training...")
-                update = client.local_train(
-                    num_epochs=local_epochs,
-                    batch_size=local_batch_size,
-                    learning_rate=local_lr,
-                    device=device,
-                    max_grad_norm=max_grad_norm,
-                    log_interval=log_interval,
-                    scheduler=scheduler,
-                    max_steps_per_epoch=max_steps_per_epoch,
-                    num_workers=num_workers,
-                )
+                try:
+                    update = client.local_train(
+                        num_epochs=local_epochs,
+                        batch_size=local_batch_size,
+                        learning_rate=local_lr,
+                        device=device,
+                        max_grad_norm=max_grad_norm,
+                        log_interval=log_interval,
+                        scheduler=scheduler,
+                        max_steps_per_epoch=max_steps_per_epoch,
+                        num_workers=num_workers,
+                    )
+                except KeyboardInterrupt:
+                    tqdm.write("\n  [INTERRUPT] KeyboardInterrupt during client training")
+                    self._interrupted = True
+                    self._save_history_snapshot()
+                    raise
+                except Exception as e:
+                    self._save_crash_report(
+                        f"round_{round_num}_client_{client.client_id}", e
+                    )
+                    client_errors.append(client.client_id)
+                    continue  # Skip failed client, continue with others
                 if self.aggregation_rule == "anchor_prm":
                     update["anchor_embeddings"] = self._extract_anchor_embeddings(
                         client, device=device
@@ -529,12 +637,23 @@ class FederatedSimulator:
                     torch.cuda.synchronize()
                     torch.cuda.empty_cache()
 
+            # Warn if any clients failed; skip round if too few updates
+            if client_errors:
+                tqdm.write(f"  [WARN] Clients failed this round: {client_errors}")
+                if len(client_updates) < 2:
+                    tqdm.write(f"  [WARN] Only {len(client_updates)} client(s) succeeded, "
+                               f"skipping aggregation and eval")
+                    self._save_history_snapshot()
+                    continue
+
             # 3. CD-SPI (pre-aggregation, always if requested)
             # This is cheap (only N_anchor steps forward) and runs before
             # aggregation so it reflects client-specific head weights.
             cd_spi_metrics: dict[str, float] = {}
             func_divergence: dict[str, float] = {}
             cd_spi_sym_metrics: dict = {}
+            ood_results: dict = {}
+            label_noise_results: dict = {}
             if self.compute_cd_spi and len(client_updates) >= 2:
                 cd_spi_metrics = self._eval_cd_spi(device=device)
                 if cd_spi_metrics:
@@ -717,6 +836,9 @@ class FederatedSimulator:
 
             if on_round_end is not None:
                 on_round_end(round_num, self.server.get_global_model())
+
+            # Auto-save history snapshot for crash recovery
+            self._save_history_snapshot()
 
         round_pbar.close()
         total_elapsed = time.perf_counter() - global_start

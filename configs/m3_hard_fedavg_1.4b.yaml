@@ -40,6 +40,7 @@ evaluation:
   eval_every: 1
   eval_split: "val"
   compute_cd_spi: true
+  symmetrical_cd_spi: true
   skip_eval: false
 
 logging:

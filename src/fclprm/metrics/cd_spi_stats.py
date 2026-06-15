@@ -39,7 +39,8 @@ def permutation_test_cd_spi(
 
     Returns:
         Dict with keys: observed_cd_spi, p_value, null_mean, null_std,
-        null_percentiles (5th, 95th), significant (bool at α=0.05).
+        null_percentiles (5th, 95th), significant (bool at α=0.05),
+        effect_size (Cohen's d), n_permutations.
     """
     if len(client_embeddings) < 2:
         return {"observed_cd_spi": 0.0, "p_value": 1.0, "significant": False}
@@ -68,14 +69,23 @@ def permutation_test_cd_spi(
     null_t = torch.tensor(null_vals)
     p_value = (null_t >= observed.item()).float().mean().item()
 
+    # Cohen's d effect size: (observed - null_mean) / null_std
+    null_std_val = null_t.std().item()
+    null_mean_val = null_t.mean().item()
+    effect_size = (
+        (observed.item() - null_mean_val) / null_std_val
+        if null_std_val > 1e-12 else 0.0
+    )
+
     return {
         "observed_cd_spi": round(observed.item(), 6),
         "p_value": round(p_value, 6),
-        "null_mean": round(null_t.mean().item(), 6),
-        "null_std": round(null_t.std().item(), 6),
+        "null_mean": round(null_mean_val, 6),
+        "null_std": round(null_std_val, 6),
         "null_p05": round(torch.quantile(null_t, 0.05).item(), 6),
         "null_p95": round(torch.quantile(null_t, 0.95).item(), 6),
         "significant": bool(p_value < 0.05),
+        "effect_size": round(effect_size, 4),
         "n_permutations": n_permutations,
     }
 

@@ -40,13 +40,16 @@ python scripts/run_federated.py --config configs/m3_fedavg_partialft_last8_1.4b.
 python scripts/run_federated.py --config configs/m3_fedavg_partialft_mlp_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml
 
-# Phase 1-1: 架构消融（激活函数）
-python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_relu.yaml
+# Phase 1-1: 架构消融（激活函数，默认ReLU已覆盖，GELU/Identity为消融）
 python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_gelu.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_identity.yaml
 
-# Phase 2-4: OOD + 异质性
+# Phase 1-3: CKA交叉验证（用已有config加symmetrical_cd_spi = true自动启用）
+# Phase 2-4: OOD + 异质性（--ood和--label-noise为CLI覆盖）
 python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml --ood
+python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml --label-noise
+# 覆盖轮数：
+python scripts/run_federated.py --config configs/smoke_versaprm.yaml --rounds 5
 ```
 
 ## 关键路径
@@ -88,6 +91,8 @@ python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml --ood
 ## 工作约定
 - 提交信息用英文，遵循 `fix(scope): description` 格式
 - 主分支：`main`（远程 `origin` 为 `https://github.com/FauReam/FCL-PRM-fullft.git`）
+- **训练代码规范**：详见 [TRAINING_CONVENTIONS.md](TRAINING_CONVENTIONS.md) — 进度条、检查点、错误栈、运行日志、终端断开存活 5 条强制要求
+- **终端命令格式**：当用户索要运行命令时，必须以换行续行的代码块给出。每行不超过 50 字符，用 `\` 折行。禁止单行超长命令。
 
 ### 进度条（强制性）
 - tqdm 覆盖 rounds / clients / batches，每层有 desc / total / postfix

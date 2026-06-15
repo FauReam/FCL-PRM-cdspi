@@ -168,11 +168,40 @@ def compute_pca_evr(
     n_clients = len(embeddings)
     d = embeddings[0].shape[0]
 
+    # Validate: check for NaN and dimension consistency
+    for cid, emb in zip(client_embeddings.keys(), embeddings):
+        if emb.shape[0] != d:
+            raise ValueError(f"Inconsistent embedding dimensions: "
+                             f"client {cid} has dim {emb.shape[0]}, expected {d}")
+        if torch.isnan(emb).any():
+            return {
+                "evr_first": float("nan"),
+                "evr_ratio": float("nan"),
+                "evr_all": [],
+                "interpretation": "nan_input",
+                "n_clients": n_clients,
+                "embedding_dim": d,
+                "warning": "NaN values in input embeddings",
+            }
+
     # Stack embeddings: (n_clients, D)
     X = torch.stack(embeddings)
 
     # Center the data
     X_centered = X - X.mean(dim=0, keepdim=True)
+
+    # Check for zero variance (all embeddings identical)
+    total_var_raw = X_centered.pow(2).sum() / (n_clients - 1)
+    if total_var_raw < 1e-12:
+        return {
+            "evr_first": 0.0,
+            "evr_ratio": 1.0,
+            "evr_all": [0.0] * min(n_clients, d),
+            "interpretation": "zero_variance",
+            "n_clients": n_clients,
+            "embedding_dim": d,
+            "warning": "All embeddings identical (zero variance)",
+        }
 
     # Compute covariance matrix and eigen-decomposition
     # For n_clients < D, use SVD on X directly (more efficient)

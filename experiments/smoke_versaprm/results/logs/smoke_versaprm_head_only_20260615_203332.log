@@ -1,0 +1,18 @@
+[INFO] Logging mirrored to: experiments/smoke_versaprm/results/logs/smoke_versaprm_head_only_20260615_203332.log
+[SMOKE] Initializing model: EleutherAI/pythia-1.4b
+[INFO] Head activation: relu (default)
+[INFO] Skipping torch.compile (ARM64, Triton unavailable).
+[INFO] Training mode: head-only (torch.bfloat16)
+[SMOKE] Loading data from: ./data/versaprm
+  Client 0 (math): 2030 step samples
+  Client 1 (code): 3611 step samples
+  Client 2 (medical): 1035 step samples
+  Client 3 (general): 1995 step samples
+[SMOKE] Starting federated simulation
+  Rounds: 3
+  Clients: 4
+  Aggregation: fedavg
+
+[Round 1/2] Starting
+  [GPU] allocated=0.00GB reserved=0.00GB
+  [Round 1] Client 0 training...

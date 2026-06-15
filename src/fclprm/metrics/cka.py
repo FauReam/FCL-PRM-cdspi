@@ -52,6 +52,14 @@ def compute_cka(
     if features_x.shape[0] < 2:
         raise ValueError("Need at least 2 samples for CKA computation")
 
+    # Check for NaN
+    if torch.isnan(features_x).any() or torch.isnan(features_y).any():
+        return float("nan")
+
+    # Check for zero-variance inputs
+    if features_x.std() < 1e-12 or features_y.std() < 1e-12:
+        return 1.0  # both constant → identical up to scaling
+
     n = features_x.shape[0]
 
     # Center the Gram matrices

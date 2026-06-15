@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-06-15T23:49:33.828622",
+  "stage": "simulator_run",
+  "error_type": "KeyboardInterrupt",
+  "error_message": "User interrupted simulation",
+  "traceback": "Traceback (most recent call last):\n  File \"/home/jiayu/FCL-PRM/scripts/run_federated.py\", line 604, in main\n    results = simulator.run(\n              ^^^^^^^^^^^^^^\n  File \"/home/jiayu/FCL-PRM/src/fclprm/federated/simulator.py\", line 596, in run\n    update = client.local_train(\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/home/jiayu/FCL-PRM/src/fclprm/federated/client.py\", line 170, in local_train\n    loss_val = loss.item()\n               ^^^^^^^^^^^\nKeyboardInterrupt\n"
+}

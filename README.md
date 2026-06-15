@@ -84,6 +84,7 @@ python scripts/train_centralized_prm.py --config configs/m2_centralized_full_1.4
 # Phase 0-2: 容量连续谱 M3
 python scripts/run_federated.py --config configs/m3_fedavg_lora_r8_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_lora_r64_1.4b.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_lora_r128_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_lora_r256_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_partialft_last2_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_partialft_last4_1.4b.yaml
@@ -93,7 +94,7 @@ python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_full_1.4b.yaml
 
 # Phase 1-1: 架构消融（激活函数）
-python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_relu.yaml
+python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_gelu.yaml
 python scripts/run_federated.py --config configs/m3_fedavg_head_1.4b_identity.yaml
 

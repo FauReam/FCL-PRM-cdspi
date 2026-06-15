@@ -23,7 +23,7 @@ data:
   data_dir: "./data/versaprm"
   domains: ["math", "code", "medical", "general"]
   samples_per_client: 5000
-  max_length: 256
+  max_length: 384
 
 federated:
   num_clients: 4
@@ -41,6 +41,7 @@ training:
   log_interval: 5
 
 evaluation:
+  symmetrical_cd_spi: true
   eval_every: 1
   eval_split: "val"
   compute_cd_spi: true

@@ -1,0 +1,21 @@
+[INFO] Logging mirrored to: experiments/M3_head_gelu_1.4b/results/logs/m3_fedavg_head_1.4b_gelu_20260615_235810.log
+[M3-head] Initializing model: EleutherAI/pythia-1.4b
+[INFO] Head activation: gelu (architecture ablation)
+[INFO] Skipping torch.compile (ARM64, Triton unavailable).
+[INFO] Training mode: head-only + head_act=gelu (torch.bfloat16)
+[M3-head] Loading data from: ./data/versaprm
+  [Data] Tokenized: 201769 steps total, 201769 kept, 0 dropped (0.0% >384 tokens, not truncated)
+  Client 0 (math): 49818 step samples
+  Client 1 (code): 74341 step samples
+  Client 2 (medical): 30680 step samples
+  Client 3 (general): 46930 step samples
+[M3-head] Starting federated simulation
+  Rounds: 25
+  Clients: 4
+  Aggregation: fedavg
+  Anchor selection: diverse | requested=100 | selected=100
+  Anchor steps: 100
+
+[Round 1/2] Starting
+  [GPU] allocated=0.00GB reserved=0.00GB
+  [Round 1] Client 0 training...

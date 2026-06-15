@@ -7,9 +7,18 @@ Usage:
 
 import argparse
 import hashlib
+import json as _json
 import os
+import signal
 import sys
+import traceback as _traceback
+from datetime import datetime, timezone
 from pathlib import Path
+
+# Run offline by default — use cached models, never auto-update from HF Hub.
+# Set HF_HUB_OFFLINE=0 to allow downloads of new models.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 import torch
 import torch.nn.functional as F
@@ -33,6 +42,7 @@ from fclprm.models.checkpoint import save_checkpoint
 from fclprm.utils.config import ExperimentConfig
 from fclprm.utils.logging import ExperimentLogger
 from fclprm.utils.seed import set_seed
+from fclprm.utils.tee import Tee
 
 
 def _load_hf_asset(load_fn, model_name: str, **kwargs):
@@ -63,6 +73,44 @@ def _get_data_cache_path(config: ExperimentConfig) -> Path:
     return cache_dir / f"step_dataset_{key}.pt"
 
 
+# ── Global state for graceful shutdown ──────────────────────────────────
+_interrupted = False
+
+
+def _setup_sigint_handler() -> None:
+    """Install SIGINT handler for graceful shutdown on Ctrl+C."""
+    original = signal.getsignal(signal.SIGINT)
+
+    def _handler(sig, frame):
+        global _interrupted
+        _interrupted = True
+        print("\n  [SIGNAL] SIGINT received — finishing current epoch, then exiting...")
+        print("  [SIGNAL] Press Ctrl+C again to force exit.")
+        signal.signal(signal.SIGINT, original)
+
+    signal.signal(signal.SIGINT, _handler)
+
+
+def _save_crash_report(error: Exception, stage: str, checkpoint_dir: str) -> Path:
+    """Save structured crash report for post-mortem debugging."""
+    crash_dir = Path(checkpoint_dir).parent / "crashes"
+    crash_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    crash_path = crash_dir / f"crash_{stage}_{timestamp}.json"
+    report = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "stage": stage,
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "traceback": _traceback.format_exc(),
+    }
+    with open(crash_path, "w") as f:
+        _json.dump(report, f, indent=2, ensure_ascii=False)
+    print(f"\n[FATAL] {report['error_type']}: {report['error_message']}")
+    print(f"[FATAL] Crash report saved to: {crash_path}")
+    return crash_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train centralized PRM baseline")
     parser.add_argument(
@@ -90,14 +138,110 @@ def main() -> None:
     use_amp = device.type == "cuda"
     scaler = GradScaler(device.type) if use_amp else None
 
-    log_dir = config.get("logging.log_dir", "./logs")
+    log_dir = Path(config.get("logging.log_dir", "./logs"))
+    log_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = config.get("logging.checkpoint_dir", "./checkpoints")
     save_every = config.get("logging.save_every", 0)
+    log_interval = config.get("training.log_interval", 10)
+
+    # ── Mirror stdout to timestamped log file ─────────────────────────
+    timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"{config.get('experiment.name', 'm2_baseline')}_{timestamp_str}.log"
+    tee = Tee(log_path)
+    sys.stdout = tee
+    print(f"[INFO] Logging mirrored to: {log_path}")
 
     logger = ExperimentLogger(
-        log_dir=log_dir,
+        log_dir=str(log_dir),
         experiment_id=config.get("experiment.name", "m2_baseline"),
     )
+
+    # ── SIGINT handler ─────────────────────────────────────────────────
+    _setup_sigint_handler()
+
+    try:
+        _run_training(
+            config=config, args=args, device=device, use_amp=use_amp,
+            scaler=scaler, log_dir=log_dir, checkpoint_dir=checkpoint_dir,
+            save_every=save_every, log_interval=log_interval, logger=logger,
+        )
+    except KeyboardInterrupt:
+        _save_crash_report(
+            KeyboardInterrupt("User interrupted training"),
+            "training", checkpoint_dir,
+        )
+    except Exception as e:
+        _save_crash_report(e, "training", checkpoint_dir)
+        raise
+    finally:
+        if sys.stdout is tee:
+            sys.stdout = tee.terminal
+            tee.close()
+            print(f"[INFO] Log saved to: {log_path}")
+
+
+def _save_training_snapshot(
+    model, optimizer, global_step: int, epoch: int,
+    best_val_loss: float, checkpoint_dir: str, config: ExperimentConfig,
+) -> Path:
+    """Save a recovery snapshot of the current training state.
+
+    Called on SIGINT or at end of each epoch for crash recovery.
+    Writes a minimal JSON manifest alongside a checkpoint so that
+    `--resume` can pick up where it left off.
+    """
+    snapshot_dir = Path(checkpoint_dir) / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = snapshot_dir / "latest_training_state.pt"
+
+    # Save full model + optimizer state
+    cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    raw_optim = optimizer.state_dict()
+    cpu_optim: dict = {"state": {}, "param_groups": raw_optim["param_groups"]}
+    for pid, sv in raw_optim["state"].items():
+        cpu_optim["state"][pid] = {
+            k: v.cpu() if isinstance(v, torch.Tensor) else v
+            for k, v in sv.items()
+        }
+
+    torch.save({
+        "model_state_dict": cpu_state,
+        "optimizer_state_dict": cpu_optim,
+        "global_step": global_step,
+        "epoch": epoch,
+        "best_val_loss": best_val_loss,
+    }, snapshot_path)
+
+    # Write companion manifest
+    manifest_path = snapshot_dir / "latest_training_state.json"
+    with open(manifest_path, "w") as f:
+        _json.dump({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "global_step": global_step,
+            "epoch": epoch + 1,
+            "best_val_loss": best_val_loss,
+            "config_hash": config.hash(),
+        }, f, indent=2)
+
+    del cpu_state, cpu_optim
+    import gc
+    gc.collect()
+    return snapshot_path
+
+
+def _run_training(
+    config: ExperimentConfig,
+    args: argparse.Namespace,
+    device: torch.device,
+    use_amp: bool,
+    scaler: GradScaler | None,
+    log_dir: Path,
+    checkpoint_dir: str,
+    save_every: int,
+    log_interval: int,
+    logger: ExperimentLogger,
+) -> None:
+    """Core training logic — factored out so main() can wrap it in try/except."""
 
     print(f"[M2] Initializing model: {config.get('model.backbone')}")
     try:
@@ -217,10 +361,14 @@ def main() -> None:
                         encoded = tokenizer(
                             text,
                             padding=False,
-                            truncation=True,
-                            max_length=max_length,
+                            truncation=False,
+                            max_length=None,
                             return_tensors=None,
                         )
+                        # Filter: drop steps exceeding max_length.
+                        # Truncation introduces overfitting to incomplete steps.
+                        if len(encoded["input_ids"]) > max_length:
+                            continue
                         all_samples.append(
                             {
                                 "input_ids": torch.tensor(
@@ -354,6 +502,15 @@ def main() -> None:
             print(f"[M2] Scheduler fast-forwarded to step {global_step}")
 
     for epoch in range(start_epoch, num_epochs):
+        global _interrupted
+        if _interrupted:
+            print(f"\n  [STOP] Interrupted before epoch {epoch + 1}")
+            _save_training_snapshot(
+                model, optimizer, global_step, epoch, best_val_loss,
+                checkpoint_dir, config,
+            )
+            break
+
         model.train()
         epoch_loss = 0.0
         num_batches = 0
@@ -364,6 +521,8 @@ def main() -> None:
             unit="batch",
         )
         for batch in pbar:
+            if _interrupted:
+                break
             # Skip batches already trained before resume
             if epoch == start_epoch and num_batches <= skip_batches:
                 num_batches += 1
@@ -423,7 +582,7 @@ def main() -> None:
                 if scheduler is not None
                 else optimizer.param_groups[0]["lr"]
             )
-            if num_batches % 10 == 0:
+            if num_batches % log_interval == 0:
                 pbar.set_postfix(
                     {
                         "loss": f"{loss.item():.4f}",
@@ -510,6 +669,12 @@ def main() -> None:
                 Path(old_ckpt).unlink()
                 print(f"  [CKPT] Removed old epoch checkpoint: {Path(old_ckpt).name}")
         print(f"  [CKPT] Saved epoch {epoch + 1} checkpoint: {Path(epoch_ckpt).name}")
+
+        # ── Save training snapshot for crash recovery ─────────────────
+        _save_training_snapshot(
+            model, optimizer, global_step, epoch,
+            best_val_loss, checkpoint_dir, config,
+        )
 
     # Save final checkpoint at end of training
     final_ckpt = save_checkpoint(

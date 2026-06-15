@@ -1,0 +1,43 @@
+# M2: Centralized full-parameter FT — Pythia-1.4B
+# Centralized anchor: establish the upper bound for full-parameter FT.
+# P0-1: Sanity check — if head-only vs full-FT gap <= 2%, F5 is triggered.
+# Also computes symmetrical CD-SPI baseline (single model, single client ~ 0).
+
+experiment:
+  name: "m2_centralized_full_1.4b"
+  milestone: "M2"
+  description: "Centralized full-parameter FT: Pythia-1.4B, VersaPRM, 1 client (sanity check)"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  hidden_dim: 2048
+  freeze_backbone: false
+  prm_head_dim: 256
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  max_length: 384
+
+training:
+  epochs: 3
+  batch_size: 4
+  learning_rate: 5.0e-6
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 10
+
+evaluation:
+  eval_split: "val"
+
+logging:
+  log_dir: "./experiments/M2_centralized_full_1.4b/results/logs"
+  checkpoint_dir: "./experiments/M2_centralized_full_1.4b/results/checkpoints"
+  save_every: 500
+
+hardware:
+  device: "cuda"
+  num_workers: 0

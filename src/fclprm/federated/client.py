@@ -58,6 +58,9 @@ class FederatedClient:
         max_steps_per_epoch: int | None = None,
         num_workers: int = 0,
     ) -> dict:
+        # Belt-and-suspenders: YAML 1.1 parses "1e-4" as string, not float.
+        learning_rate = float(learning_rate)
+
         """Run local training for specified epochs.
 
         Args:
@@ -163,16 +166,15 @@ class FederatedClient:
                 loss.backward()
                 optimizer.step()
 
-                # Force CUDA sync on Windows to surface async errors early
-                if device == "cuda":
-                    torch.cuda.synchronize()
-
-                total_loss += loss.item()
+                # Extract loss once (each .item() triggers a GPU sync)
+                loss_val = loss.item()
+                total_loss += loss_val
                 num_batches += 1
-                epoch_loss += loss.item()
+                epoch_loss += loss_val
                 epoch_batches += 1
 
-                pbar.set_postfix(loss=f"{loss.item():.4f}")
+                if num_batches % log_interval == 0:
+                    pbar.set_postfix(loss=f"{loss_val:.4f}")
 
             if lr_scheduler is not None:
                 lr_scheduler.step()

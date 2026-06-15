@@ -10,9 +10,14 @@ logging.log_dir so you do not need shell pipes like Tee-Object.
 """
 
 import argparse
-import random
 import os
+import random
 import sys
+
+# Run offline by default — use cached models, never auto-update from HF Hub.
+# Set HF_HUB_OFFLINE=0 to allow downloads of new models.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +32,7 @@ from fclprm.models.base_wrapper import StepRewardModel
 from fclprm.utils.config import ExperimentConfig
 from fclprm.utils.logging import ExperimentLogger
 from fclprm.utils.seed import set_seed
+from fclprm.utils.tee import Tee
 
 
 def _save_global_checkpoint(model, round_num: int, milestone: str, checkpoint_dir: str, device: str) -> None:
@@ -127,47 +133,6 @@ def _find_latest_checkpoint(checkpoint_dir: str, milestone: str):
     return max(checkpoints, key=lambda x: x[0])
 
 
-class Tee:
-    """Mirror stdout to both terminal and a log file."""
-
-    def __init__(self, log_path: Path) -> None:
-        self.terminal = sys.stdout
-        self.log_file = log_path.open("w", encoding="utf-8")
-        self._file_buf = ""
-
-    def write(self, message: str) -> None:
-        # Terminal always sees everything (handles \r correctly)
-        self.terminal.write(message)
-        self.terminal.flush()
-
-        # For the log file: accumulate; on \n write the complete line.
-        # tqdm uses \r to overwrite the same line — we keep only the last
-        # segment so the log file does not get cluttered with repeats.
-        self._file_buf += message
-        if "\r" in message and "\n" not in message:
-            self._file_buf = self._file_buf.rsplit("\r", 1)[-1]
-        elif "\n" in message:
-            parts = self._file_buf.split("\n")
-            for part in parts[:-1]:
-                self.log_file.write(part + "\n")
-            self._file_buf = parts[-1]
-            self.log_file.flush()
-
-    def flush(self) -> None:
-        self.terminal.flush()
-        if self._file_buf:
-            self.log_file.write(self._file_buf + "\n")
-            self._file_buf = ""
-            self.log_file.flush()
-
-    def isatty(self) -> bool:
-        return self.terminal.isatty()
-
-    def close(self) -> None:
-        if self._file_buf:
-            self.log_file.write(self._file_buf + "\n")
-        self.log_file.close()
-
 
 def _load_hf_asset(load_fn, model_name: str, **kwargs):
     """Load from HF Hub with automatic fallback to local cache on network errors."""
@@ -181,10 +146,49 @@ def _load_hf_asset(load_fn, model_name: str, **kwargs):
         raise
 
 
+def _save_crash_report(error: Exception, stage: str, log_dir: Path) -> Path:
+    """Save structured crash report for post-mortem debugging.
+
+    Returns the path to the crash report file.
+    """
+    import json as _json
+    import traceback as _traceback
+    from datetime import datetime as _datetime
+
+    crash_dir = log_dir / "crashes"
+    crash_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = _datetime.now().strftime("%Y%m%d_%H%M%S")
+    crash_path = crash_dir / f"crash_{stage}_{timestamp}.json"
+    report = {
+        "timestamp": _datetime.now().isoformat(),
+        "stage": stage,
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "traceback": _traceback.format_exc(),
+    }
+    with open(crash_path, "w") as f:
+        _json.dump(report, f, indent=2, ensure_ascii=False)
+    print(f"\n[FATAL] {report['error_type']}: {report['error_message']}")
+    print(f"[FATAL] Crash report saved to: {crash_path}")
+    return crash_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run federated PRM simulation")
     parser.add_argument(
         "--config", type=str, required=True, help="Path to YAML config file"
+    )
+    parser.add_argument(
+        "--ood", action="store_true", default=None,
+        help="Enable cross-domain OOD evaluation (overrides config)"
+    )
+    parser.add_argument(
+        "--label-noise", action="store_true", default=None,
+        help="Enable label noise robustness evaluation (overrides config)"
+    )
+    parser.add_argument(
+        "--rounds", type=int, default=None,
+        help="Override number of federated rounds"
     )
     args = parser.parse_args()
 
@@ -310,17 +314,37 @@ def main() -> None:
     # Resume from latest checkpoint if available
     checkpoint_dir = config.get("logging.checkpoint_dir", "./checkpoints")
     milestone = config.get("experiment.milestone", "M3")
+    num_rounds = config.get("federated.num_rounds", 25)
+    if args.rounds is not None:
+        num_rounds = args.rounds
     latest_round, latest_path = _find_latest_checkpoint(checkpoint_dir, milestone)
     start_round = 0
     if latest_round is not None and latest_path is not None:
-        print(f"[INFO] Resuming from checkpoint: {latest_path} (completed {latest_round} rounds)")
-        state_items = list(global_model.state_dict().keys())
-        with tqdm(total=1, desc="Loading checkpoint", leave=False) as pbar:
-            checkpoint = torch.load(str(latest_path), map_location="cpu")
-            global_model.load_state_dict(checkpoint["model_state_dict"])
-            pbar.update(1)
-        start_round = latest_round
-        print(f"[INFO] Will start from round {start_round + 1}")
+        if latest_round >= num_rounds:
+            print(
+                f"[WARN] Checkpoint r{latest_round} already reaches "
+                f"num_rounds ({num_rounds}) — ignoring stale checkpoint, "
+                f"starting from round 1"
+            )
+            # Remove the stale checkpoint so it doesn't block future runs
+            Path(str(latest_path)).unlink(missing_ok=True)
+        else:
+            print(
+                f"[INFO] Resuming from checkpoint: {latest_path} "
+                f"(completed {latest_round} rounds)"
+            )
+            with tqdm(
+                total=1, desc="Loading checkpoint", leave=False
+            ) as pbar:
+                checkpoint = torch.load(
+                    str(latest_path), map_location="cpu"
+                )
+                global_model.load_state_dict(
+                    checkpoint["model_state_dict"]
+                )
+                pbar.update(1)
+            start_round = latest_round
+            print(f"[INFO] Will start from round {start_round + 1}")
 
     print(
         f"[{config.get('experiment.milestone')}] Loading data from: {config.get('data.data_dir')}"
@@ -340,7 +364,11 @@ def main() -> None:
     num_clients = config.get("federated.num_clients", 4)
     domains = config.get("data.domains", ["math", "code", "medical", "general"])
     max_length = config.get("data.max_length", 512)
-    samples_per_client = config.get("data.samples_per_client", 5000)
+    # Support both data.samples_per_client (federated) and data.samples_per_domain (centralized)
+    samples_per_client = config.get(
+        "data.samples_per_client",
+        config.get("data.samples_per_domain", 5000),
+    )
     partition_pattern = config.get("data.partition", "domain")
 
     # Tokenize all samples into a flat pool first (with domain annotation)
@@ -367,15 +395,29 @@ def main() -> None:
                 text = f"{question}\n{step_text}"
                 anchor_candidates.append((domain, text))
                 encoded = tokenizer(
-                    text, padding=False, truncation=True,
-                    max_length=max_length, return_tensors=None,
+                    text, padding=False, truncation=False,
+                    max_length=None, return_tensors=None,
                 )
+                # Filter: drop step if tokenized length exceeds max_length.
+                # Truncation introduces overfitting to incomplete steps.
+                if len(encoded["input_ids"]) > max_length:
+                    continue
                 all_step_samples.append({
                     "input_ids": torch.tensor(encoded["input_ids"]),
                     "attention_mask": torch.tensor(encoded["attention_mask"]),
                     "label": float(label),
                     "domain": domain,
                 })
+
+    total_anchor = len(anchor_candidates)
+    kept = len(all_step_samples)
+    if total_anchor > 0:
+        pct_dropped = (1 - kept / total_anchor) * 100
+        print(
+            f"  [Data] Tokenized: {total_anchor} steps total, "
+            f"{kept} kept, {total_anchor - kept} dropped "
+            f"({pct_dropped:.1f}% >{max_length} tokens, not truncated)"
+        )
 
     # Partition across clients according to heterogeneity pattern
     if partition_pattern == "domain":
@@ -416,9 +458,19 @@ def main() -> None:
     # via `anchor.steps` in YAML, or sampled dynamically from client data using
     # `anchor.anchor_selection` (random / diverse / domain-balanced).
     aggregation_rule = config.get("federated.aggregation", "fedavg")
+    compute_cd_spi = config.get("evaluation.compute_cd_spi", False)
+    compute_sym_cd_spi = config.get("evaluation.symmetrical_cd_spi", False)
     anchor_inputs = None
     anchor_steps = None
-    if aggregation_rule == "anchor_prm":
+    # Anchor steps are required for: (a) anchor_prm aggregation, or (b) CD-SPI
+    # measurement (both asymmetric and symmetric). Without anchor steps, CD-SPI
+    # silently returns {} — which would mask a missing-data bug.
+    needs_anchor_steps = (
+        aggregation_rule == "anchor_prm"
+        or compute_cd_spi
+        or compute_sym_cd_spi
+    )
+    if needs_anchor_steps:
         anchor_steps_config = config.get("anchor.steps", None)
         if anchor_steps_config is not None:
             # Explicit anchor steps from config
@@ -499,18 +551,22 @@ def main() -> None:
             f"  DP-SGD: enabled (epsilon={dp_epsilon}, delta={dp_delta}, max_grad_norm={dp_max_grad_norm})"
         )
 
-    # OOD evaluation configuration
-    eval_ood = config.get("evaluation.ood.enabled", False)
+    # OOD evaluation configuration (CLI overrides config)
+    eval_ood = args.ood if args.ood is not None else config.get("evaluation.ood.enabled", False)
     ood_domains = domains if eval_ood else None
-    eval_label_noise = config.get("evaluation.label_noise.enabled", False)
+    eval_label_noise = args.label_noise if args.label_noise is not None else config.get("evaluation.label_noise.enabled", False)
     label_noise_ratios = config.get("evaluation.label_noise.ratios", [0.0, 0.1, 0.2])
 
-    # Symmetrical CD-SPI (P0* control experiment)
-    compute_symmetrical_cd_spi = config.get("evaluation.symmetrical_cd_spi", False)
+    # Override rounds from CLI
+    if args.rounds is not None:
+        pass  # applied at simulator construction below
+
+    # Work dir for auto-save history and crash reports
+    simulator_work_dir = str(Path(checkpoint_dir).parent / "simulator_state")
 
     simulator = FederatedSimulator(
         num_clients=num_clients,
-        num_rounds=config.get("federated.num_rounds", 50),
+        num_rounds=args.rounds if args.rounds is not None else config.get("federated.num_rounds", 50),
         global_model=global_model,
         client_data=client_data,
         aggregation_rule=aggregation_rule,
@@ -520,7 +576,7 @@ def main() -> None:
         dp_enabled=dp_enabled,
         dp_epsilon=dp_epsilon,
         dp_delta=dp_delta,
-        compute_cd_spi=config.get("evaluation.compute_cd_spi", False),
+        compute_cd_spi=compute_cd_spi,
         eval_every=config.get("evaluation.eval_every", 1),
         participation_rate=config.get("federated.participation_rate", 1.0),
         skip_eval=config.get("evaluation.skip_eval", False),
@@ -528,7 +584,8 @@ def main() -> None:
         ood_domains=ood_domains,
         eval_label_noise=eval_label_noise,
         label_noise_ratios=label_noise_ratios,
-        compute_symmetrical_cd_spi=compute_symmetrical_cd_spi,
+        compute_symmetrical_cd_spi=compute_sym_cd_spi,
+        work_dir=simulator_work_dir,
     )
 
     save_every = config.get("logging.save_every", 10)
@@ -557,19 +614,51 @@ def main() -> None:
                         device=device,
                     )
 
-    results = simulator.run(
-        local_epochs=config.get("federated.local_epochs", 2),
-        local_batch_size=config.get("federated.local_batch_size", 32),
-        local_lr=config.get("federated.local_learning_rate", 1e-4),
-        device=device,
-        max_grad_norm=dp_max_grad_norm,
-        log_interval=config.get("training.log_interval", 5),
-        start_round=start_round,
-        on_round_end=_on_round_end,
-        scheduler=config.get("training.scheduler", None),
-        max_steps_per_epoch=config.get("training.max_steps_per_epoch", None),
-        num_workers=config.get("hardware.num_workers", 0),
-    )
+    try:
+        results = simulator.run(
+            local_epochs=config.get(
+                "federated.local_epochs",
+                config.get("training.num_epochs", 2),
+            ),
+            local_batch_size=config.get(
+                "federated.local_batch_size",
+                config.get("training.batch_size", 32),
+            ),
+            local_lr=config.get(
+                "federated.local_learning_rate",
+                config.get("training.learning_rate", 1e-4),
+            ),
+            device=device,
+            max_grad_norm=dp_max_grad_norm,
+            log_interval=config.get("training.log_interval", 5),
+            start_round=start_round,
+            on_round_end=_on_round_end,
+            scheduler=config.get("training.scheduler", None),
+            max_steps_per_epoch=config.get("training.max_steps_per_epoch", None),
+            num_workers=config.get("hardware.num_workers", 0),
+        )
+    except KeyboardInterrupt:
+        _save_crash_report(
+            KeyboardInterrupt("User interrupted simulation"),
+            "simulator_run", log_dir,
+        )
+        return
+    except Exception as e:
+        _save_crash_report(e, "simulator_run", log_dir)
+        raise
+    finally:
+        # Always restore stdout and flush log, even on crash
+        if sys.stdout is tee:
+            sys.stdout = tee.terminal
+            tee.close()
+            print(f"[INFO] Log saved to: {log_path}")
+
+    if not results.get("history"):
+        print(
+            f"[WARN] No rounds completed — skipping final checkpoint "
+            f"and summary"
+        )
+        return
 
     # Save final model to disk regardless of save_every interval
     final_round = results['num_rounds'] - 1
@@ -619,16 +708,41 @@ def main() -> None:
         final_metrics["cd_spi"] = final_record["cd_spi"]
     if "cd_spi_sym" in final_record:
         final_metrics["cd_spi_sym"] = final_record["cd_spi_sym"]
+    if "func_divergence" in final_record:
+        final_metrics["func_divergence"] = final_record["func_divergence"]
     logger.log(
         milestone=config.get("experiment.milestone"),
         config_hash=config.hash(),
         metrics=final_metrics,
     )
 
-    # Restore stdout and close log file
-    sys.stdout = tee.terminal
-    tee.close()
-    print(f"[INFO] Log saved to: {log_path}")
+    # Save experiment summary JSON alongside the log
+    import json as _json
+    summary_path = Path(log_dir) / f"{config.get('experiment.name', 'run')}_summary.json"
+    try:
+        def _convert(v):
+            if isinstance(v, torch.Tensor):
+                return v.item()
+            if isinstance(v, dict):
+                return {k: _convert(x) for k, x in v.items()}
+            if isinstance(v, list):
+                return [_convert(x) for x in v]
+            return v
+        summary = {
+            "experiment": config.get("experiment.name"),
+            "milestone": config.get("experiment.milestone"),
+            "config_hash": config.hash(),
+            "status": "completed",
+            "total_rounds": results["num_rounds"],
+            "total_sec": round(results.get("total_sec", 0), 1),
+            "final_metrics": _convert(final_metrics),
+        }
+        with open(summary_path, "w") as f:
+            _json.dump(summary, f, indent=2, ensure_ascii=False)
+        print(f"[INFO] Summary saved to: {summary_path}")
+    except Exception as e:
+        print(f"[WARN] Could not save summary JSON: {e}")
+
 
 
 if __name__ == "__main__":
