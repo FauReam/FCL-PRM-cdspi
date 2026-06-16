@@ -1,4 +1,4 @@
-# FCL-PRM-fullft
+# FCL-PRM-cdspi
 
 **Federated Continual Process Reward Model — CD-SPI Diagnostic Framework**  
 联邦持续过程奖励模型 · CD-SPI 发散结构诊断框架
@@ -119,7 +119,7 @@ NVIDIA GB10（121GB 统一内存，ARM64）。可运行 Pythia-1.4B 全参数 FT
 | 第 1 轮（6 专家） | 4.25/10 | 缺少 LoRA 基线、CD-SPI 无统计完备性、99.7% 饱和 |
 | 第 2 轮（4 专家×2 轮迭代） | 3.50/10 | CD-SPI 非独立方法贡献、「容量叙事」降级为实验变量、三项矛盾两项解决 |
 
-详见完整报告：👉 **[EXPERT_PANEL_REPORT.md](./EXPERT_PANEL_REPORT.md)** / **[EXPERT_PANEL_REPORT_V2.html](./EXPERT_PANEL_REPORT_V2.html)**
+详见完整报告：👉 **[Expert Panel Diagnosis (md)](./docs/expert_panel_diagnosis.md)** / **[Expert Panel Report V3 (html)](./reports/EXPERT_PANEL_REPORT_V3.html)**
 
 ---
 

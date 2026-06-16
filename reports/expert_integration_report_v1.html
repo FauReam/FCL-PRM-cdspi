@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FCL-PRM 专家意见整合报告 — 第一版</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --border: #e2e5ea;
+    --text: #1a1d23;
+    --muted: #6b7280;
+    --accent-clarity: #3b82f6;
+    --accent-gap: #8b5cf6;
+    --accent-mechanism: #ef4444;
+    --accent-surprise: #f59e0b;
+    --high-sev: #dc2626;
+    --med-sev: #f59e0b;
+    --low-sev: #10b981;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* Header */
+  .report-header {
+    text-align: center;
+    padding: 3rem 2rem;
+    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+    border-radius: 16px;
+    color: white;
+    margin-bottom: 2rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .report-header::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 30% 50%, rgba(59,130,246,0.15) 0%, transparent 50%),
+                radial-gradient(circle at 70% 50%, rgba(139,92,246,0.12) 0%, transparent 50%);
+  }
+  .report-header h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    position: relative;
+    z-index: 1;
+  }
+  .report-header .subtitle {
+    font-size: 1rem;
+    opacity: 0.8;
+    margin-top: 0.5rem;
+    position: relative;
+    z-index: 1;
+  }
+  .report-header .meta {
+    font-size: 0.85rem;
+    opacity: 0.6;
+    margin-top: 0.75rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Score Summary */
+  .score-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .score-card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 1.25rem;
+    box-shadow: var(--shadow);
+    border-top: 4px solid var(--border);
+    text-align: center;
+    transition: transform 0.15s;
+  }
+  .score-card:hover { transform: translateY(-2px); }
+  .score-card.clarity { border-top-color: var(--accent-clarity); }
+  .score-card.gap { border-top-color: var(--accent-gap); }
+  .score-card.mechanism { border-top-color: var(--accent-mechanism); }
+  .score-card.surprise { border-top-color: var(--accent-surprise); }
+
+  .score-card .expert-label {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .score-card .score {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin: 0.25rem 0;
+  }
+  .score-card.clarity .score { color: var(--accent-clarity); }
+  .score-card.gap .score { color: var(--accent-gap); }
+  .score-card.mechanism .score { color: var(--accent-mechanism); }
+  .score-card.surprise .score { color: var(--accent-surprise); }
+
+  .score-card .verdict {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .score-card .verdict.weak-reject { color: #b45309; }
+  .score-card .verdict.reject { color: #dc2626; }
+
+  /* Aggregate score */
+  .aggregate-card {
+    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+    border-radius: 12px;
+    padding: 1.5rem;
+    color: white;
+    text-align: center;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow);
+  }
+  .aggregate-card .label { font-size: 0.85rem; opacity: 0.7; }
+  .aggregate-card .agg-score { font-size: 2.8rem; font-weight: 700; }
+  .aggregate-card .agg-verdict {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-top: 0.25rem;
+  }
+
+  /* Section */
+  .section {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 1.75rem;
+    margin-bottom: 1.5rem;
+    box-shadow: var(--shadow);
+  }
+  .section h2 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--border);
+  }
+  .section h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 1rem 0 0.5rem;
+  }
+  .section h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0.75rem 0 0.35rem;
+    color: var(--muted);
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: #f1f3f5;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  tr:hover { background: #fafbfc; }
+
+  /* Contradiction specific */
+  .contradiction-card {
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  .contradiction-card.high { border-left: 6px solid var(--high-sev); }
+  .contradiction-card.medium { border-left: 6px solid var(--med-sev); }
+  .contradiction-card.low { border-left: 6px solid var(--low-sev); }
+  .contradiction-card .severity-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    color: white;
+    margin-bottom: 0.5rem;
+  }
+  .severity-badge.high { background: var(--high-sev); }
+  .severity-badge.medium { background: var(--med-sev); }
+  .severity-badge.low { background: var(--low-sev); }
+
+  .between-label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 0.35rem;
+  }
+  .between-label strong { color: var(--text); }
+
+  /* Tags */
+  .tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-right: 0.25rem;
+  }
+  .tag.clarity { background: #dbeafe; color: #1d4ed8; }
+  .tag.gap { background: #ede9fe; color: #6d28d9; }
+  .tag.mechanism { background: #fee2e2; color: #b91c1c; }
+  .tag.surprise { background: #fef3c7; color: #92400e; }
+
+  /* Proposition box */
+  .proposition-box {
+    background: #f0f9f0;
+    border: 1px solid #bbf7bb;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 0.75rem 0;
+  }
+  .proposition-box h4 { color: #166534; margin-top: 0; }
+
+  /* Improvement table compact */
+  .improvement-list {
+    list-style: none;
+    padding: 0;
+  }
+  .improvement-list li {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.9rem;
+  }
+  .improvement-list li:last-child { border-bottom: none; }
+  .improvement-list .source { font-size: 0.75rem; opacity: 0.6; }
+
+  /* Score bar */
+  .score-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0.25rem 0;
+  }
+  .score-bar {
+    flex: 1;
+    height: 8px;
+    background: #e5e7eb;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .score-bar .fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.5s;
+  }
+
+  .footer-note {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--muted);
+    padding: 2rem 0 0;
+    border-top: 1px solid var(--border);
+    margin-top: 2rem;
+  }
+
+  @media (max-width: 768px) {
+    .score-grid { grid-template-columns: repeat(2, 1fr); }
+    body { padding: 1rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- Header -->
+<div class="report-header">
+  <h1>FCL-PRM 专家意见整合报告</h1>
+  <div class="subtitle">六专家 Adversarial Panel 第二轮评审汇总 —— 统计整合与矛盾分析</div>
+  <div class="meta">生成日期: 2026-06-12 &middot; 版本: v1 (第一版报告) &middot; 评审范围: CD-SPI 框架命题</div>
+</div>
+
+<!-- Score Summary -->
+<div class="score-grid">
+  <div class="score-card clarity">
+    <div class="expert-label">清晰性专家</div>
+    <div class="score">5</div>
+    <div class="verdict weak-reject">Weak Reject</div>
+  </div>
+  <div class="score-card gap">
+    <div class="expert-label">真实空白专家</div>
+    <div class="score">4</div>
+    <div class="verdict reject">Reject</div>
+  </div>
+  <div class="score-card mechanism">
+    <div class="expert-label">机制联系专家</div>
+    <div class="score">3</div>
+    <div class="verdict reject">Reject</div>
+  </div>
+  <div class="score-card surprise">
+    <div class="expert-label">惊讶元素专家</div>
+    <div class="score">3</div>
+    <div class="verdict weak-reject">Weak Reject</div>
+  </div>
+</div>
+
+<!-- Aggregate -->
+<div class="aggregate-card">
+  <div class="label">综合统计</div>
+  <div class="agg-score">3.75 / 10</div>
+  <div class="agg-verdict">综合判决: Reject (当前状态不足以达到 ICLR 2027 接收标准)</div>
+  <div style="margin-top:0.75rem;font-size:0.85rem;opacity:0.7;">
+    评分区间: 3–5 &middot; 标准差: 0.83 &middot; 中位数: 3.5 &middot; 四分位距: 1.5
+  </div>
+</div>
+
+<!-- Expert Detail Summary -->
+<div class="section">
+  <h2>一、四位专家核心观点摘要</h2>
+
+  <h3><span class="tag clarity">清晰性专家</span> 评分 5/10 — Weak Reject</h3>
+  <p><strong>核心批判:</strong> 命题存在10个关键盲点，核心问题是概念缺乏操作化定义("容量饱和"、"结构化散度"、"有意义的差异")导致循环论证陷阱；EVR阈值(0.4/0.6)为猜测值无动机；H4因果关系无法在当前实验设计下检验；多重比较未控制。</p>
+  <p><strong>核心改进方向:</strong> 操作化定义所有核心概念、替换因果主张为相关性、预设阈值校准计划、添加F6/F7证伪条件、应用FDR校正。改进只需1-2天文本修改。</p>
+  <p><strong>改进命题:</strong> 清晰性专家的改进版本是四位专家中最具体的——重新定义了H1-H4'的假设边界、统计标准和证伪条件。</p>
+
+  <h3><span class="tag gap">真实空白专家</span> 评分 4/10 — Reject</h3>
+  <p><strong>核心批判:</strong> CD-SPI填充了一个真实但狭窄的空白。7项竞争工作(Task2Vec Readiness为最严重威胁)覆盖了CD-SPI的几乎每个组件——余弦相似度发散分析、统计显著性检验、容量阈值、信号/噪声分解。零实验数据意味着没有经验证据表明这个组合能提供任何超出各部分之和的见解。</p>
+  <p><strong>核心改进方向:</strong> 与Task2Vec Readiness的明确区分(实验验证)、为排列检验和PCA EVR增加理论深度(检验功效分析、随机矩阵理论零分布)、阐明与FedCDD的区别、增加反直觉发现。</p>
+
+  <h3><span class="tag mechanism">机制联系专家</span> 评分 3/10 — Reject</h3>
+  <p><strong>核心批判:</strong> 因果链在五个环节断裂：容量与优化被混淆、排列检验零假设在FL中被根本性违反(p值误报膨胀)、n=4客户端时PCA EVR统计上不可靠(随机矩阵理论表明纯噪声下EVR可超0.6)、任意阈值、缺乏不确定性量化。提出5个替代假说(优化瓶颈、初始化效应、表征不匹配、记忆化、异质性混杂)。</p>
+  <p><strong>核心改进方向:</strong> 合成数据校准移至P0、n_clients敏感性分析、推导置信区间、集中式vs联邦对照、散度正则化干预作为核心因果检验、指向性分析。</p>
+
+  <h3><span class="tag surprise">惊讶元素专家</span> 评分 3/10 — Weak Reject</h3>
+  <p><strong>核心批判:</strong> H1-H4全部预测了最直觉性的结果——容量越高发散越结构化聚合越好。没有任何假设是反直觉的，零信息增量。如果自变量(容量)完美预测因变量(CD-SPI)，诊断框架没有独立价值。提供8个明确的Plan B触发条件。</p>
+  <p><strong>核心改进方向:</strong> 添加"容量固定"对照实验验证CD-SPI独立诊断价值、添加早期预测验证、寻找反直觉案例、放弃H3阈值转为非单调性探索、叙事重构为"FedAvg失败模式分析"。</p>
+</div>
+
+<!-- Contradiction Analysis -->
+<div class="section">
+  <h2>二、矛盾分析</h2>
+  <p style="color:var(--high-sev);font-weight:600;margin-bottom:1rem;">
+    has_contradictions = true (共识别出 4 处矛盾/分歧)
+  </p>
+
+  <!-- Contradiction 1 -->
+  <div class="contradiction-card high">
+    <span class="severity-badge high">HIGH</span>
+    <div class="between-label">矛盾双方: <strong>清晰性专家</strong> vs <strong>机制联系专家</strong></div>
+    <p><strong>矛盾点: PCA EVR 在 n=4 客户端场景下的统计有效性</strong></p>
+    <p>清晰性专家认为EVR阈值(0.4/0.6)可以通过合成数据校准解决(改进4:"在Phase 0之前先用合成数据校准EVR阈值")，并在此基础上提出了改进命题版本，其中EVR阈值是核心判断标准之一。</p>
+    <p>机制联系专家则指出，当 n=4 客户端、p=14336 嵌入维度时(n &lt;&lt; p)，随机矩阵理论(Marchenko-Pastur分布)表明即使是独立同分布的高斯噪声，第一主成分EVR也可能超过0.6。这是一个根本性的统计信噪比问题——无论怎么校准阈值，在4个样本点上对14336维向量做PCA不能可靠地区分信号和噪声。这与校准方法无关，是n&lt;&lt;p下的固有局限性。</p>
+    <p><strong>分歧本质:</strong> 清晰性专家将EVR阈值问题视为"校准参数选择不当"(改进后可解决)，机制联系专家将其视为"在n=4条件下的方法无效"(不能通过校准解决)。这直接影响改进命题中EVR作为核心判断标准的可行性。</p>
+  </div>
+
+  <!-- Contradiction 2 -->
+  <div class="contradiction-card medium">
+    <span class="severity-badge medium">MEDIUM</span>
+    <div class="between-label">矛盾双方: <strong>真实空白专家</strong> vs <strong>惊讶元素专家</strong></div>
+    <p><strong>矛盾点: CD-SPI 框架的独立新颖性</strong></p>
+    <p>真实空白专家认为"没有任何已发表工作将排列检验与PCA EVR系统地结合，作为区分FL客户端发散中噪声型与信号型结构的专用诊断协议"——这个特定的组合是新的，虽然空白狭窄。空白专家承认Task2Vec Readiness是"直接威胁"但认为通过实验区分可以解决。</p>
+    <p>惊讶元素专家则认为所有实验都以容量为自变量、CD-SPI为因变量，如果自变量完美预测因变量(容量越高CD-SPI越高)，CD-SPI就没有独立于容量的诊断价值——"诊断框架没有独立价值"。惊讶专家尖锐指出论文声称"CD-SPI是贡献、容量是实验变量"但实验设计以容量为核心自变量，这是自我矛盾的。</p>
+    <p><strong>分歧本质:</strong> 空白专家认为"新组合=新贡献"(即使不反直觉)，惊讶专家认为"新组合+零意外发现=零信息增量"。前者关注方法论组合的完整性，后者关注实证发现的信息量。如果实验只发现容量单调性，空白专家可能仍认为这是"新应用领域的首次表征"，而惊讶专家认为这是零贡献。</p>
+  </div>
+
+  <!-- Contradiction 3 -->
+  <div class="contradiction-card medium">
+    <span class="severity-badge medium">MEDIUM</span>
+    <div class="between-label">矛盾双方: <strong>清晰性专家</strong> vs <strong>机制联系专家</strong></div>
+    <p><strong>矛盾点: H4 因果关系主张的可修复性</strong></p>
+    <p>清晰性专家认为H4因果claim可以通过简单替换为相关性(H4': ρ>0.7)来解决(改进2:"替换H4因果性主张为相关性主张，或指定可执行的干预实验")。这是一个语义层面的修正。</p>
+    <p>机制联系专家指出即使替换为相关性，仍存在至少一个未测混杂变量H(异质性程度)同时驱动CD-SPI和聚合性能——即使在去除了因果语言后，相关性本身也可能是虚假的。更根本的是"缺失链接B"——没有任何机制解释说明为什么结构化(低秩)散度比各向同性散度更适合FedAvg平均化。没有机制解释，即使相关性成立，论文也无法回答"为什么"。</p>
+    <p><strong>分歧本质:</strong> 清晰性专家将问题定位为"措辞"(causal→correlational)，机制联系专家将问题定位为"缺失因果链的理论基础"(即使不提causality，相关性也可能是混杂的，且无机制故事)。</p>
+  </div>
+
+  <!-- Contradiction 4 -->
+  <div class="contradiction-card medium">
+    <span class="severity-badge medium">MEDIUM</span>
+    <div class="between-label">矛盾双方: <strong>清晰性专家</strong> vs <strong>机制联系专家</strong></div>
+    <p><strong>矛盾点: 排列检验在联邦学习中的有效性</strong></p>
+    <p>清晰性专家认为排列检验本身是有效的，主要问题是多重比较未控制(盲点9:"排列检验对每个步骤/轮次/客户端组合运行...命题未提及多重假设校正")。改进建议为使用Benjamini-Hochberg FDR校正。</p>
+    <p>机制联系专家则认为排列检验的零假设——"客户端可交换"(样本标签的打乱不影响散度分布)——在FL中被根本性地违反。客户端看到的是不同的底层数据分布(PCA漂移)，打乱标签会打破真实的数据结构，导致误报率膨胀的p值(CD-SPI弱点2)。这不是校正能解决的，而是零假设本身不成立。</p>
+    <p><strong>分歧本质:</strong> 清晰性专家将排列检验问题视为"统计程序未规范"(需要校正即可)，机制联系专家视为"统计假设被违反"(零假设在FL设定下不成立，需要不同的统计框架)。</p>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">矛盾矩阵</h3>
+  <table>
+    <tr>
+      <th>矛盾编号</th>
+      <th>严重程度</th>
+      <th>涉及专家</th>
+      <th>核心议题</th>
+      <th>分歧类型</th>
+    </tr>
+    <tr>
+      <td>C1</td>
+      <td><span class="severity-badge high" style="font-size:0.75rem;">HIGH</span></td>
+      <td>清晰性 vs 机制</td>
+      <td>PCA EVR 在 n<<p 下的有效性</td>
+      <td>方法是否根本可行 vs 参数需要优化</td>
+    </tr>
+    <tr>
+      <td>C2</td>
+      <td><span class="severity-badge medium" style="font-size:0.75rem;">MEDIUM</span></td>
+      <td>空白 vs 惊讶</td>
+      <td>CD-SPI 框架的独立新颖性</td>
+      <td>组合新=贡献 vs 零意外=零信息</td>
+    </tr>
+    <tr>
+      <td>C3</td>
+      <td><span class="severity-badge medium" style="font-size:0.75rem;">MEDIUM</span></td>
+      <td>清晰性 vs 机制</td>
+      <td>H4 因果关系可修复性</td>
+      <td>措辞修正 vs 理论基础缺失</td>
+    </tr>
+    <tr>
+      <td>C4</td>
+      <td><span class="severity-badge medium" style="font-size:0.75rem;">MEDIUM</span></td>
+      <td>清晰性 vs 机制</td>
+      <td>排列检验在FL下的有效性</td>
+      <td>统计程序规范 vs 假设被违反</td>
+    </tr>
+  </table>
+</div>
+
+<!-- Cross-cutting themes -->
+<div class="section">
+  <h2>三、跨专家一致意见</h2>
+  <p>尽管存在上述分歧，四位数专家在以下方面高度一致:</p>
+  <table>
+    <tr><th style="width:40px;">#</th><th>共同意见</th><th style="width:100px;">涉及专家</th></tr>
+    <tr><td>1</td><td><strong>合成数据校准必须前置(P1-4移至P0/Phase 0前期):</strong> 四位专家一致认为，在没有任何实验数据的情况下设定EVR阈值和统计标准是危险的。合成数据校准(已知ground truth的发散结构)必须在核心实验之前完成，否则框架的核心区分标准是猜测。</td><td>全部四位</td></tr>
+    <tr><td>2</td><td><strong>H4的因果主张不可接受:</strong> 清晰性、机制、惊讶三位专家都指出H4("散度结构化程度与聚合性能间存在因果关系")在当前实验设计下无法检验。机制专家指出存在未测混杂变量，惊讶专家指出这是循环论证，清晰性专家建议改为相关性。</td><td>清晰、机制、惊讶</td></tr>
+    <tr><td>3</td><td><strong>EVR阈值(0.4/0.6)缺乏动机:</strong> 清晰性、机制、空白三位专家均指出EVR阈值是任意的，没有理论或实证支撑。清晰性和机制专家建议通过合成数据校准，空白专家建议联系随机矩阵理论建立零分布。</td><td>清晰、机制、空白</td></tr>
+    <tr><td>4</td><td><strong>需要与FedAvg社区建立理论联系:</strong> 空白专家指出FedDYN/SCAFFOLD/MOON/FedProx已有发散-性能关系的理论收敛界；机制专家指出缺少"结构化散度为何有利于平均化"的机制解释；惊讶专家建议重构叙事为"FedAvg失败模式分析"。</td><td>空白、机制、惊讶</td></tr>
+    <tr><td>5</td><td><strong>需要反直觉/非平凡发现:</strong> 惊讶专家和空白专家都认为，如果实验只发现容量单调性，论文的贡献极为有限。惊讶专家要求至少一个"容量固定但CD-SPI变化"的实验，空白专家要求"挑战conventional wisdom的发现"。</td><td>空白、惊讶</td></tr>
+  </table>
+</div>
+
+<!-- Expert Comparison Table -->
+<div class="section">
+  <h2>四、专家评分与改进方案对比</h2>
+  <table>
+    <tr>
+      <th>维度</th>
+      <th>清晰性(5/10)</th>
+      <th>空白(4/10)</th>
+      <th>机制(3/10)</th>
+      <th>惊讶(3/10)</th>
+    </tr>
+    <tr>
+      <td><strong>评分</strong></td>
+      <td>5</td>
+      <td>4</td>
+      <td>3</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td><strong>判决</strong></td>
+      <td>Weak Reject</td>
+      <td>Reject</td>
+      <td>Reject</td>
+      <td>Weak Reject</td>
+    </tr>
+    <tr>
+      <td><strong>关注焦点</strong></td>
+      <td>概念清晰度、操作化定义、证伪条件完备性</td>
+      <td>文献定位、竞争工作、空白真实性</td>
+      <td>因果链条完整性、统计可靠性、替代假说控制</td>
+      <td>信息增量、反直觉发现、叙事自洽性</td>
+    </tr>
+    <tr>
+      <td><strong>最致命问题</strong></td>
+      <td>核心概念无操作化定义</td>
+      <td>Task2Vec Readiness是直接威胁</td>
+      <td>n=4下PCA EVR统计无效+因果链断裂</td>
+      <td>零信息增量，CD-SPI是容量代理</td>
+    </tr>
+    <tr>
+      <td><strong>改进数量</strong></td>
+      <td>10项</td>
+      <td>8项</td>
+      <td>6项</td>
+      <td>9项</td>
+    </tr>
+    <tr>
+      <td><strong>优先级建议</strong></td>
+      <td>操作化定义→替换因果claim→预注册阈值</td>
+      <td>区分Task2Vec→增加理论深度→文献定位表</td>
+      <td>合成数据前置→n_clients敏感性→置信区间</td>
+      <td>容量固定对照→早期预测→反直觉案例</td>
+    </tr>
+    <tr>
+      <td><strong>修复预期</strong></td>
+      <td>1-2天文本修改</td>
+      <td>需数周实验+理论工作</td>
+      <td>需重新设计核心实验</td>
+      <td>需重新设计实验寻找反直觉现象</td>
+    </tr>
+  </table>
+</div>
+
+<!-- Improved Proposition -->
+<div class="section">
+  <h2>五、综合改进命题</h2>
+  <p>以下是在参考四位专家意见(特别是处理了上述矛盾后)的改进命题版本。核心改动标记:</p>
+
+  <div class="proposition-box">
+    <h4>CD-SPI 诊断框架命题 (v2 综合改进版)</h4>
+    <p style="margin-top:0.5rem;">
+      本文提出 <strong>CD-SPI</strong> (Client Divergence Signal-Noise Partition Index) 诊断协议——一个由排列检验(经FDR校正)和PCA EVR(经合成数据校准+随机矩阵理论校正的阈值)两阶段构成的统计诊断框架，旨在区分联邦学习中跨客户端发散的模式类型。该协议应用于<strong>联邦PRM微调</strong>这一文献中未充分探索的场景。
+    </p>
+    <p><strong>核心假设:</strong></p>
+    <ul style="margin-left:1.25rem;margin-bottom:0.5rem;">
+      <li><strong>H1 (低容量噪声假说):</strong> 在dense backbone + FedAvg基线下，head-only和LoRA r&le;256配置的跨客户端嵌入差异在排列检验中p &ge; 0.05(FDR校正后)且EVR &le; 校准阈值(来自合成数据预校准)。该类发散与FedAvg聚合增益无显著相关(Spearman |&rho;| &lt; 0.3, p &gt; 0.05)。<br><em>注: r=256的边界归属通过敏感性分析处理——若r=256的行为靠近head-only(低EVR)则归入H1，若靠近full FT(高EVR)则触发边界条件修正。</em></li>
+      <li><strong>H2 (高容量结构假说):</strong> 全参数FT的跨客户端差异在排列检验中p &lt; 0.05且EVR &gt; 校准阈值，与聚合增益正相关(Spearman &rho; &gt; 0.5, p &lt; 0.05)。</li>
+      <li><strong>H3 (容量转变区假说):</strong> 存在一个容量转变区(由EVR vs log(rank)的分段线性回归拐点定位)，在该区间内发散类型由噪声主导演变为结构主导。转变区的位置与FlexLoRA/SFed-LoRA的理论预测进行比较。<br><em>注: 不预设"突跳阈值"，而是检测连续转变区。若分段线性拟合R² &gt; 0.95且无不连续点，"阈值"claim修正为"连续转变"(根据惊讶专家和空白专家的共同建议)。</em></li>
+      <li><strong>H4' (相关性假说):</strong> 散度结构化程度(以EVR为指标)与聚合增益的Spearman相关系数 |&rho;| &gt; 0.7。该假说仅描述相关性，不主张因果关系。<br><em>注: 控制异质性水平(&alpha; Dirichlet = 0.1, 0.5, 1.0, 5.0, &infin;)作为协变量，检验偏相关是否仍然显著(回应机制专家关于混杂变量的批评)。</em></li>
+    </ul>
+    <p><strong>关键操作化定义:</strong></p>
+    <ul style="margin-left:1.25rem;margin-bottom:0.5rem;">
+      <li>"容量饱和" := 参数增加N倍(N &ge; 4)但下游性能提升 &lt; 5% (基于验证集准确率)</li>
+      <li>"结构化散度" := EVR &gt; 校准阈值(来自合成数据ground truth验证，最大化F1 score) AND 排列检验p &lt; 0.05(FDR校正) AND CKA交叉验证一致</li>
+      <li>"有意义的差异" := 与聚合增益的Spearman相关系数 |&rho;| &gt; 0.5 且 p &lt; 0.05</li>
+    </ul>
+    <p><strong>证伪条件:</strong></p>
+    <ul style="margin-left:1.25rem;margin-bottom:0.5rem;">
+      <li><strong>F6' (新):</strong> 若EVR与聚合增益的Spearman |&rho;| &lt; 0.3或p &gt; 0.05(控制异质性后)，H4'被证伪</li>
+      <li><strong>F7 (新):</strong> 若EVR在LoRA r=8到full FT之间单调连续变化(分段线性拟合R² &gt; 0.95且无不连续点)，H3的"阈值"claim修正为"连续转变"</li>
+      <li><strong>F8 (新):</strong> 若合成数据校准后CD-SPI的F1 score &lt; 0.7(在n=4, p=14336设定下)，框架区分能力不足，停止实验</li>
+    </ul>
+    <p><strong>核心贡献声明(修正):</strong> 本文贡献不是新的相似度度量，而是将FL中已有的余弦相似度系统化为一个可区分噪声型与信号型发散的统计诊断协议，并将其首次应用于联邦PRM微调场景。CD-SPI的诊断价值通过以下三个实验验证: (1) 合成数据ground truth校准(F1 score); (2) 容量固定对照实验(相同参数量的不同微调策略是否产生不同CD-SPI特征); (3) 跨领域泛化验证(VersaPRM 14个领域)。</p>
+  </div>
+
+  <h4>对矛盾的回应</h4>
+  <table>
+    <tr><th>矛盾</th><th>综合改进中的回应</th></tr>
+    <tr><td>C1: PCA EVR n<<p 有效性</td><td>增加F8停止信号(合成数据F1<0.7则终止); 采用随机矩阵理论校正的EVR零分布而非纯经验阈值; 增加n_clients敏感性分析(n=4,8,16,32仿真)</td></tr>
+    <tr><td>C2: CD-SPI独立新颖性</td><td>保留"新应用领域的首次诊断表征"定位(C4); 添加"容量固定对照实验"验证CD-SPI超越容量代理的独立诊断价值; 与Task2Vec Readiness/FlexLoRA等工作的比较明确写入实验部分</td></tr>
+    <tr><td>C3: H4可修复性</td><td>替换因果语言为相关性(H4'); 控制异质性水平作为协变量(偏相关检验); 增加散度正则化干预实验(Phase 2前置)提供有限的因果证据</td></tr>
+    <tr><td>C4: 排列检验FL有效性</td><td>承认零假设"客户端可交换"的局限性(H0: 散度模式在标签置换下不变≠客户端同分布); 通过合成数据验证FDR控制; 报告置换检验的校准p值而非原始p值</td></tr>
+  </table>
+</div>
+
+<!-- Improvement Priority -->
+<div class="section">
+  <h2>六、改进优先级矩阵</h2>
+  <p>综合四位专家意见，按"紧急程度×影响范围"排序:</p>
+  <table>
+    <tr>
+      <th>优先级</th>
+      <th>改进项</th>
+      <th>来源专家</th>
+      <th>工作量</th>
+      <th>紧急原因</th>
+    </tr>
+    <tr style="background:#fef2f2;">
+      <td><strong>P0-Critical</strong></td>
+      <td>合成数据校准前置(Phase 0)，验证n=4下EVR有效性和CD-SPI F1 score</td>
+      <td>全部四位</td>
+      <td>1-2周实验</td>
+      <td>如F1<0.7则框架无效，所有后续实验无意义</td>
+    </tr>
+    <tr style="background:#fef2f2;">
+      <td><strong>P0-Critical</strong></td>
+      <td>建立与Task2Vec Readiness的明确实验区分</td>
+      <td>空白、惊讶</td>
+      <td>2-3周实验+对比</td>
+      <td>最严重的竞争威胁，审稿人首次提问</td>
+    </tr>
+    <tr style="background:#fffbeb;">
+      <td><strong>P1-High</strong></td>
+      <td>操作化定义所有核心概念(容量饱和、结构化散度、有意义的差异)</td>
+      <td>清晰性</td>
+      <td>0.5天文本</td>
+      <td>消除循环论证，使假设可检验</td>
+    </tr>
+    <tr style="background:#fffbeb;">
+      <td><strong>P1-High</strong></td>
+      <td>替换H4因果主张为相关性，控制异质性混杂</td>
+      <td>清晰性、机制、惊讶</td>
+      <td>1天文本+实验设计修改</td>
+      <td>当前claim不可检验，需在实验前修正</td>
+    </tr>
+    <tr style="background:#fffbeb;">
+      <td><strong>P1-High</strong></td>
+      <td>添加F6/F7/F8证伪条件和停止信号</td>
+      <td>清晰性、机制</td>
+      <td>0.5天文本</td>
+      <td>使框架具备科学可证伪性</td>
+    </tr>
+    <tr style="background:#f0f9f0;">
+      <td><strong>P2-Medium</strong></td>
+      <td>添加容量固定对照实验(同参数量不同微调策略)</td>
+      <td>惊讶、空白</td>
+      <td>1-2周实验</td>
+      <td>验证CD-SPI独立于容器的诊断价值</td>
+    </tr>
+    <tr style="background:#f0f9f0;">
+      <td><strong>P2-Medium</strong></td>
+      <td>多重比较校正(FDR)预注册</td>
+      <td>清晰性</td>
+      <td>0.5天文本</td>
+      <td>避免假阳性膨胀</td>
+    </tr>
+    <tr style="background:#f0f9f0;">
+      <td><strong>P2-Medium</strong></td>
+      <td>创建文献定位表(与7项竞争工作的四维对比)</td>
+      <td>空白</td>
+      <td>1-2天文献工作</td>
+      <td>明确空白范围，回应审稿人质疑</td>
+    </tr>
+    <tr style="background:#f0f9f0;">
+      <td><strong>P2-Medium</strong></td>
+      <td>为PCA EVR添加随机矩阵理论零分布</td>
+      <td>机制、空白</td>
+      <td>1-2周理论工作</td>
+      <td>给EVR阈值提供理论依据</td>
+    </tr>
+    <tr style="background:#f0f9f0;">
+      <td><strong>P3-Later</strong></td>
+      <td>添加早期预测验证(Round 1-5 CD-SPI预测Round 25排名)</td>
+      <td>惊讶</td>
+      <td>数据分析,与实验并行</td>
+      <td>验证CD-SPI的实用诊断价值</td>
+    </tr>
+    <tr>
+      <td><strong>P3-Later</strong></td>
+      <td>集中式vs联邦对照实验</td>
+      <td>机制</td>
+      <td>额外实验</td>
+      <td>验证联邦特异性</td>
+    </tr>
+    <tr>
+      <td><strong>P3-Later</strong></td>
+      <td>指向性分析(Wasserstein距离/聚类一致性指标)</td>
+      <td>机制</td>
+      <td>方法设计+实验</td>
+      <td>区分各向同性vs双峰发散</td>
+    </tr>
+  </table>
+</div>
+
+<!-- Detailed Expert Opinions Table -->
+<div class="section">
+  <h2>七、专家改进方案详细对照</h2>
+
+  <h3>清晰性专家 (10项改进)</h3>
+  <ul class="improvement-list">
+    <li><strong>改进1:</strong> 操作化定义所有核心概念(P0前完成) <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进2:</strong> 替换H4因果性主张为相关性(H4': ρ>0.7) <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进3:</strong> 将"阈值"改为"转变区"，预设分段线性回归判定标准 <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进4:</strong> 预设EVR阈值校准计划(合成数据最大化F1) <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进5:</strong> 消除r=256边界模糊(推荐方案A) <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进6:</strong> 为H4添加证伪条件F6 <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进7:</strong> 为H3添加证伪条件F7 <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进8:</strong> 预设多重比较校正(FDR q=0.05) <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进9:</strong> 移除"被所有相关工作忽略"，改写为可检验的定位声明 <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进10:</strong> 加入EVR阈值的PASS/FAIL标准(F8) <span class="source">— 已在综合命题中采纳</span></li>
+  </ul>
+
+  <h3>真实空白专家 (8项改进)</h3>
+  <ul class="improvement-list">
+    <li><strong>改进1:</strong> 实验前建立与Task2Vec Readiness的明确区分文档 <span class="source">— P0优先级</span></li>
+    <li><strong>改进2:</strong> 为排列检验增加理论深度(检验功效分析、与CFL分离间隙的形式联系) <span class="source">— P2优先级</span></li>
+    <li><strong>改进3:</strong> 为PCA EVR增加理论支撑(随机矩阵理论零分布) <span class="source">— P2优先级</span></li>
+    <li><strong>改进4:</strong> 阐明与FedCDD的区别 <span class="source">— P1优先级</span></li>
+    <li><strong>改进5:</strong> 版本化VersaPRM的贡献(跨领域比较) <span class="source">— P2优先级</span></li>
+    <li><strong>改进6:</strong> 因果证据最低标准(CD-SPI正则化干预) <span class="source">— P2优先级</span></li>
+    <li><strong>改进7:</strong> 创建竞争工作四维对比表 <span class="source">— P2优先级</span></li>
+    <li><strong>改进8:</strong> 寻找对容量阈值的反直觉发现 <span class="source">— P2优先级</span></li>
+  </ul>
+
+  <h3>机制联系专家 (6项改进)</h3>
+  <ul class="improvement-list">
+    <li><strong>改进1:</strong> 合成数据校准前置P0 (n=4, p=14336时EVR有效性验证) <span class="source">— P0优先级，已在综合命题中采纳为F8</span></li>
+    <li><strong>改进2:</strong> n_clients敏感性分析(n=4,8,16,32) <span class="source">— P0优先级</span></li>
+    <li><strong>改进3:</strong> 为CD-SPI和PCA EVR推导置信区间(5种子重复) <span class="source">— P1优先级</span></li>
+    <li><strong>改进4:</strong> 添加集中式vs联邦对照实验 <span class="source">— P2优先级</span></li>
+    <li><strong>改进5:</strong> 散度正则化干预纳入P0 <span class="source">— P1优先级</span></li>
+    <li><strong>改进6:</strong> 添加指向性分析(Wasserstein距离) <span class="source">— P3优先级</span></li>
+  </ul>
+
+  <h3>惊讶元素专家 (9项改进)</h3>
+  <ul class="improvement-list">
+    <li><strong>改进1:</strong> 添加"容量固定"对照实验(LoRA attn vs MLP vs embedding) <span class="source">— P2优先级，核心验证CD-SPI独立价值</span></li>
+    <li><strong>改进2:</strong> 添加早期预测验证(Round 1-5预测Round 25) <span class="source">— P2优先级</span></li>
+    <li><strong>改进3:</strong> 寻找至少一个反直觉案例 <span class="source">— P2优先级</span></li>
+    <li><strong>改进4:</strong> 放弃H3阈值或重新定义为非单调性探索 <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进5:</strong> 核心叙事重构: "FedAvg的失败模式分析" <span class="source">— 叙事层面，综合命题部分采纳</span></li>
+    <li><strong>改进6:</strong> 合成数据校准前置 <span class="source">— P0优先级</span></li>
+    <li><strong>改进7:</strong> 弱化H4因果主张 <span class="source">— 已在综合命题中采纳</span></li>
+    <li><strong>改进8:</strong> 精简指标(5个到2-3个) <span class="source">— P2优先级</span></li>
+    <li><strong>改进9:</strong> 预注册基准风险(VersaPRM饱和性验证) <span class="source">— P0优先级</span></li>
+  </ul>
+</div>
+
+<!-- Closing -->
+<div class="footer-note">
+  <p><strong>第一版报告</strong> — 本报告为四位专家评审意见的统计整合与矛盾分析初版。</p>
+  <p>报告包含: 评分统计 / 矛盾识别与严重性评估 / 跨专家一致意见 / 综合改进命题 / 改进优先级矩阵 / 专家意见详细对照。</p>
+  <p>由于识别到 high 和 medium 级别矛盾(共4处)，需要进一步进行辩证综合和矛盾消解后生成最终版报告。</p>
+  <p>下一阶段任务: 对 C1 (PCA EVR n<<p 有效性) 进行技术论证以解决根本分歧；对 C2-C4 进行协商综合。</p>
+  <p style="margin-top:0.5rem;font-size:0.75rem;opacity:0.5;">Generated by 统计汇总专家 &middot; 2026-06-12</p>
+</div>
+
+</div>
+</body>
+</html>

@@ -75,7 +75,7 @@ nohup python scripts/run_federated.py \
 
 ### 产出
 
-- `VERIFICATION_REPORT.html` — 含 GELU 已有数据 + ReLU + LoRA r=256 对比
+- `reports/VERIFICATION_REPORT.html` — 含 GELU 已有数据 + ReLU + LoRA r=256 对比
 - 上传到 GitHub，作为 Phase 0 的 go/no-go 决策依据
 
 ---

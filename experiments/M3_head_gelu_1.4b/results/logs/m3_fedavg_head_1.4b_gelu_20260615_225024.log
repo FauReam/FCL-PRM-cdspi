@@ -1,6 +1,0 @@
-[INFO] Logging mirrored to: experiments/M3_head_gelu_1.4b/results/logs/m3_fedavg_head_1.4b_gelu_20260615_225024.log
-[M3-head] Initializing model: EleutherAI/pythia-1.4b
-[INFO] Head activation: gelu (architecture ablation)
-[INFO] Skipping torch.compile (ARM64, Triton unavailable).
-[INFO] Training mode: head-only + head_act=gelu (torch.bfloat16)
-[M3-head] Loading data from: ./data/versaprm
