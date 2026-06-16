@@ -23,6 +23,16 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Paper
-paper/
+# Paper (track sources, ignore generated)
+paper/*.pdf
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.toc
+paper/*.bbl
+paper/*.blg
+paper/*.synctex.gz
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.xdv
 *.pt
