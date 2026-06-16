@@ -1,0 +1,52 @@
+# Feasibility: Full-FT 2-round quick test (H2 — MAKE OR BREAK)
+# 500 samples/client, 2 rounds — ~20min on GB10
+# If CD-SPI sym < 0.02 after 2 rounds → H2 is falsified → KILL direction
+experiment:
+  name: "feasibility_full_1.4b"
+  milestone: "FEASIBILITY"
+  description: "Quick H2 test: full-FT 500samp 2r — does CD-SPI rise above noise?"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  hidden_dim: 2048
+  freeze_backbone: false
+  prm_head_dim: 256
+  head_activation: "relu"
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 500
+  max_length: 384
+
+federated:
+  num_clients: 4
+  num_rounds: 2
+  local_epochs: 1
+  local_batch_size: 32
+  local_learning_rate: 1.0e-4
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 1
+
+evaluation:
+  eval_every: 1
+  eval_split: "val"
+  compute_cd_spi: true
+  symmetrical_cd_spi: true
+
+logging:
+  log_dir: "./experiments/feasibility_full_1.4b/results/logs"
+  checkpoint_dir: "./experiments/feasibility_full_1.4b/results/checkpoints"
+  save_every: 1
+
+hardware:
+  device: "cuda"
+  num_workers: 4

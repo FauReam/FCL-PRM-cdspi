@@ -60,6 +60,41 @@ ls -lt experiments/smoke_versaprm/results/checkpoints/
 - [ ] 启动命令包含 `nohup ... &`
 - [ ] 实验目录可事后 `tail -f` 查看进度
 
+### 0.5 Claude Code 启动训练程序规则（强制性）
+
+**适用范围：** 任何预计运行时间 > 1 小时的训练/模拟进程。
+
+**规则：**
+
+1. **必须用 `nohup` + `&` 启动**，Claude 只返回 PID，不流式输出训练日志。
+2. **stdout/stderr 重定向到项目 `experiments/` 目录**下的时间戳日志文件。
+3. **不可用 `Bash` 工具长时间阻塞等待**输出（会导致上下文窗口被训练日志淹没）。
+4. **启动后验证进程存活**（`ps -p $PID`），然后告知用户如何监控。
+5. **终端断开不影响进程**（`nohup` 忽略 SIGHUP + 日志落盘）。
+
+**启动模板：**
+
+```bash
+nohup python scripts/run_federated.py \
+    --config configs/xxx.yaml \
+    --rounds 10 \
+    >> experiments/xxx/run_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+echo "PID: $!"
+```
+
+**Claude 响应格式：**
+
+启动后只输出：
+- PID
+- 日志文件路径
+- 预计耗时
+- 监控命令（`tail -f`，`ps -p`）
+- 当前 GPU 状态确认
+
+禁止：在 Claude 对话中实时流式输出训练 progress bar（tqdm 输出含 ANSI escape codes，会淹没上下文）。
+
+**批量实验：** 多个 config 串行跑时，使用 `scripts/run_experiments.sh` 批量启动器，单个 nohup 进程管理全部队列。每个 config 的日志独立写入 `experiments/{config}_Nr/` 子目录。批量日志写入 `experiments/batch_{timestamp}.log`。
+
 ---
 
 ## 1. 进度条 (Progress Bars) — tqdm 覆盖所有耗时层级

@@ -1,0 +1,51 @@
+# Feasibility: Head-only 2-round quick test (H1 control)
+# 500 samples/client, 2 rounds — ~10min on GB10
+experiment:
+  name: "feasibility_head_1.4b"
+  milestone: "FEASIBILITY"
+  description: "Quick H1 control: head-only 500samp 2r"
+  seed: 42
+
+model:
+  backbone: "EleutherAI/pythia-1.4b"
+  hidden_dim: 2048
+  freeze_backbone: true
+  prm_head_dim: 256
+  head_activation: "relu"
+
+data:
+  dataset: "versaprm"
+  data_dir: "./data/versaprm"
+  domains: ["math", "code", "medical", "general"]
+  samples_per_client: 500
+  max_length: 384
+
+federated:
+  num_clients: 4
+  num_rounds: 2
+  local_epochs: 1
+  local_batch_size: 128
+  local_learning_rate: 1.0e-4
+  aggregation: "fedavg"
+  participation_rate: 1.0
+
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  log_interval: 1
+
+evaluation:
+  eval_every: 1
+  eval_split: "val"
+  compute_cd_spi: true
+  symmetrical_cd_spi: true
+
+logging:
+  log_dir: "./experiments/feasibility_head_1.4b/results/logs"
+  checkpoint_dir: "./experiments/feasibility_head_1.4b/results/checkpoints"
+  save_every: 1
+
+hardware:
+  device: "cuda"
+  num_workers: 4
