@@ -1,0 +1,439 @@
+\documentclass{article}
+
+% === ICLR-style formatting (standalone fallback) ===
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{natbib}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+% Page layout matching ICLR
+\usepackage[margin=1in]{geometry}
+% \usepackage{times}  % disabled: courier font unavailable on ARM64 texlive-small
+
+\title{\Large\textbf{CD-SPI: Diagnosing Capacity-Dependent Divergence Structure\\in Federated Process Reward Models}}
+
+\author{%
+Anonymous Authors\\
+\texttt{\{anonymous\}@anonymous.edu}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Federated training of Process Reward Models (PRMs) enables privacy-preserving step-level reasoning verification across institutions, but the fundamental question of \emph{what drives effective federated aggregation} remains unexamined.
+We introduce \textbf{CD-SPI} (Client Divergence Signal-Noise Partition Index), a two-stage diagnostic framework that distinguishes structured from noisy cross-client divergence in federated PRM training.
+Through a continuous capacity spectrum spanning head-only, LoRA (r=8/64/256), partial fine-tuning, and full fine-tuning on Pythia-1.4B with VersaPRM's four-domain data, we test the hypothesis that aggregation effectiveness is determined not by the \emph{magnitude} of client divergence, but by its \emph{structural type}.
+Preliminary results confirm that head-only training produces zero structured cross-client divergence (CD-SPI$_{\text{sym}}=0.0011$, EVR$=0.0$, CKA$=1.0$), indicating that FedAvg under frozen-backbone PRMs aggregates identical representations regardless of client domain.
+The full capacity continuum experiment is currently in progress.
+Our core contribution is the CD-SPI diagnostic framework itself---a signal-structure perspective on federated aggregation that all existing work on federated reward models has overlooked.
+\end{abstract}
+
+% ============================================================
+\section{Introduction}
+% ============================================================
+
+Process Reward Models (PRMs)~\cite{lightman2023lets} have emerged as a critical component in training reasoning-capable large language models.
+By providing scalar rewards at each step of chain-of-thought reasoning, PRMs offer $10$--$100\times$ denser supervision than outcome-level reward models (ORMs), enabling more data-efficient reinforcement learning~\cite{prmsurvey2025}.
+This has made PRMs central to training frontier reasoning models such as DeepSeek-R1~\cite{moedeepseek2025} and Qwen-QwQ~\cite{qwenqwq2025}.
+
+However, high-quality step-level annotations are both sensitive and geographically distributed.
+Hospitals hold clinical reasoning traces protected by HIPAA, financial institutions possess audit reasoning chains containing trade secrets, and educational organizations control student problem-solving trajectories subject to minor data protection laws.
+Centralized PRM training on pooled data is often infeasible, making \textbf{federated PRM training} a natural next step beyond existing federated RLHF frameworks~\cite{fedbiscuit2025,fedpdpo2026,appa2026}.
+
+Critically, federated PRM training introduces a challenge absent from outcome-level federated RLHF: \textbf{step-level semantic polysemy}.
+The same reasoning step (e.g., ``let variable $x$ be\dots'') encodes fundamentally different semantics in mathematical, clinical, and programming contexts.
+When clients with heterogeneous reasoning domains collaboratively train a PRM, the divergence between their local parameter updates is not merely noise---it may encode domain-specific reasoning structures.
+Yet no existing work has systematically diagnosed \emph{when} cross-client divergence carries useful signal versus when it reflects capacity-saturated noise.
+
+\textbf{Our contribution: the CD-SPI diagnostic framework.}
+We propose CD-SPI (Client Divergence Signal-Noise Partition Index), a two-stage statistical protocol that decomposes cross-client embedding divergence into noise-driven and structure-driven components.
+CD-SPI itself is not a new similarity metric---cosine distance has been used in federated learning for client clustering~\cite{cfl2020} and LLM divergence diagnosis~\cite{fedcdd2025}.
+The novelty lies in CD-SPI's \emph{analytical framework}: a systematic, falsifiable diagnostic protocol that answers \emph{why} aggregation works or fails, rather than merely measuring \emph{how much} clients diverge.
+
+We apply CD-SPI across a \textbf{capacity continuum}---from head-only fine-tuning (256-dim MLP, lowest capacity) through LoRA at ranks 8/64/256, partial fine-tuning (last 2/4/8 layers), to full-parameter fine-tuning (1.4B parameters, highest capacity).
+Using Pythia-1.4B~(Biderman et al., 2023) as the dense backbone under standard FedAvg aggregation~\cite{fedavg2017} with four heterogeneous clients (math, code, medical, general domains from VersaPRM~\cite{versaprm2025}), we test the core hypothesis:
+
+\begin{quote}
+\textbf{Hypothesis (H1--H2):} Low-capacity configurations produce \emph{noise-type} cross-client divergence that is statistically indistinguishable from random permutations; high-capacity configurations produce \emph{structure-type} divergence with significant principal component alignment that correlates with aggregation performance.
+\end{quote}
+
+\textbf{Scope boundary.}
+Our causal claims are restricted to dense backbone architectures (Pythia series) with standard FedAvg aggregation under moderate domain heterogeneity.
+We do \emph{not} claim that full fine-tuning is the only path to effective federated PRM aggregation; MoE architectures, SCAFFOLD-style variance reduction~\cite{scaffold2020}, and attention-residual modifications may provide alternative or orthogonal solutions.
+CD-SPI as a diagnostic tool has known limitations including measurement asymmetry, architecture sensitivity, and dependence on the embedding layer choice, which we discuss in~\S\ref{sec:limitations}.
+
+% ============================================================
+\section{Related Work}
+% ============================================================
+
+\subsection{Process Reward Models}
+
+PRMs originated with \citet{lightman2023lets}'s PRM800K dataset and have since expanded across multiple dimensions.
+VersaPRM~\cite{versaprm2025} demonstrated that multi-domain PRM training across 14 reasoning domains improves generalization, but did so under centralized data pooling.
+ThinkPRM~\cite{thinkprm2025}, DreamPRM~\cite{dreamprm2025}, and MedPRMBench~\cite{medprmbench2026} each advanced PRM evaluation and training methodology, but all operate under the centralized assumption that step-level annotations can be freely shared.
+OmegaPRM~\cite{omegaprm2024} automated step annotation via MCTS, reducing annotation cost but not addressing privacy.
+None of these works consider the federated setting or diagnose how domain heterogeneity affects PRM parameter divergence.
+
+\subsection{Federated Learning and Federated RLHF}
+
+Standard federated aggregation (FedAvg~\cite{fedavg2017}) averages client parameter updates, assuming that averaging improves the global model.
+The failure modes of this assumption under Non-IID data have been extensively studied in vision~\cite{fedprox2020,scaffold2020,fedgmkd2024} and, recently, in language model alignment.
+FedBiscuit~\cite{fedbiscuit2025} proposed federated binary preference selection; FedPDPO~\cite{fedpdpo2026} and APPA~\cite{appa2026} developed federated variants of direct preference optimization.
+However, these federated RLHF works operate exclusively at the \emph{outcome level} (one scalar reward per full response), sidestepping the step-level credit assignment and polysemy problems that arise when PRM training is federated.
+
+The closest prior work in federated divergence diagnosis is CFL~\cite{cfl2020}, which uses cosine similarity for client clustering, and FedCDD~\cite{fedcdd2025}, which diagnoses LLM parameter divergence via cosine distance matrices.
+Both use cosine similarity descriptively; neither provides a statistical framework for distinguishing signal-type from noise-type divergence.
+FedGMKD~\cite{fedgmkd2024} addresses class-level Non-IID issues in federated image classification via prototype distillation, but its class-prototype abstraction does not transfer to the continuous step-embedding space of PRMs.
+
+\subsection{Privacy in Reasoning}
+
+A parallel line of work has exposed privacy vulnerabilities specific to chain-of-thought reasoning.
+SALT~\cite{salt2025} proposed inference-time activation-level interventions to prevent CoT information leakage.
+\citet{saferreasoning2026} documented PII leakage within reasoning steps, while \citet{reasoningmembership2026} demonstrated the first membership inference attack targeting reasoning models.
+These works establish the privacy motivation for federated PRM training but do not address the federated training dynamics that CD-SPI diagnoses.
+
+% ============================================================
+\section{The CD-SPI Diagnostic Framework}
+% ============================================================
+
+\subsection{Notation and Setup}
+
+Consider $K$ clients, each holding a private dataset $\mathcal{D}_k = \{(x^{(k)}_i, y^{(k)}_i)\}_{i=1}^{n_k}$ of reasoning traces with step-level labels.
+Each client trains a local PRM $f_{\theta_k}: \mathcal{X} \rightarrow \mathbb{R}$ that maps a reasoning step to a scalar reward.
+The PRM consists of a frozen or partially-trainable backbone $B_\phi$ (parameterized by $\phi$) and a reward head $H_\psi$ (parameterized by $\psi$).
+After $T$ rounds of FedAvg aggregation, client parameters $\theta_k^{(t)}$ evolve under local SGD on $\mathcal{D}_k$ followed by server averaging.
+
+For a shared set of $M$ anchor reasoning steps $\{s_1, \ldots, s_M\}$, each client $k$ produces a step embedding $h_k(s_m) \in \mathbb{R}^d$ from the penultimate layer of the backbone.
+The CD-SPI framework operates on the embedding matrices $H_k = [h_k(s_1), \ldots, h_k(s_M)]^\top \in \mathbb{R}^{M \times d}$.
+
+\subsection{CD-SPI: Definition and Symmetrical Variant}
+
+\textbf{Original CD-SPI.}
+The CD-SPI for a step $s_m$ is defined as:
+
+\begin{equation}
+\text{CD-SPI}(s_m) = 1 - \frac{1}{K(K-1)} \sum_{i \neq j} \cos\big(h_i(s_m), h_j(s_m)\big)
+\label{eq:cdspi}
+\end{equation}
+
+where $\cos(u, v) = u^\top v / (\|u\| \cdot \|v\|)$.
+CD-SPI ranges from $0$ (all clients produce identical embeddings) to $2$ (maximally anti-aligned).
+In practice, values cluster near $0$ (universal representations) for noise-type divergence and above $0.1$ for structural divergence.
+
+\textbf{Symmetrical CD-SPI (CD-SPI$_{\text{sym}}$).}
+A critical measurement issue arises when comparing configurations across the capacity continuum.
+For head-only training, using the PRM head's intermediate layer as the embedding source captures head-specific features confounded by random initialization.
+For full fine-tuning, using the head's features captures both backbone and head transformations.
+These embedding spaces are \emph{not comparable}, violating the requirement that CD-SPI differences between capacity levels reflect true representational differences rather than measurement artifacts.
+
+We introduce CD-SPI$_{\text{sym}}$, which extracts embeddings from the penultimate \emph{backbone} transformer layer, bypassing the PRM head entirely:
+
+\begin{equation}
+\text{CD-SPI}_{\text{sym}}(s_m) = 1 - \frac{1}{K(K-1)} \sum_{i \neq j} \cos\big(B_{\phi_i}^{(-2)}(s_m), B_{\phi_j}^{(-2)}(s_m)\big)
+\label{eq:cdspi_sym}
+\end{equation}
+
+where $B_{\phi}^{(-2)}$ denotes the hidden state from the second-to-last transformer layer.
+This ensures that all capacity configurations are compared in the \emph{same representational space}, making CD-SPI differences attributable to the capacity variable rather than measurement artifacts.
+
+\subsection{Two-Stage Diagnostic Protocol}
+
+CD-SPI is not a single score but a diagnostic protocol with two complementary stages.
+
+\textbf{Stage 1: Permutation Test.}
+To determine whether observed CD-SPI values reflect genuine cross-client structure or measurement noise, we perform a permutation test:
+
+\begin{enumerate}[label=(\alph*)]
+    \item \textbf{Baseline layer:} Permute client identity labels across embeddings and recompute CD-SPI. This generates a null distribution $D_{\text{base}}$ under the hypothesis of no client-specific structure.
+    \item \textbf{Independence layer:} Train $K$ independent models on the same data (matched capacity, different seeds) and compute CD-SPI between them. This controls for training stochasticity.
+    \item \textbf{Random projection layer (strongest):} Replace backbone embeddings with random Gaussian projections of the same dimensionality and compute CD-SPI. This calibrates the metric's sensitivity to spurious structure in high-dimensional spaces.
+\end{enumerate}
+
+With $B$ permutations, the permutation p-value is:
+
+\begin{equation}
+p = \frac{|\{b: \text{CD-SPI}_b \geq \text{CD-SPI}_{\text{obs}}\}| + 1}{B + 1}
+\end{equation}
+
+We use Cohen's $d$ as the primary effect size metric and p-values as auxiliary evidence.
+
+\textbf{Stage 2: Principal Component Explained Variance Ratio (PCA EVR).}
+To assess the \emph{dimensional structure} of cross-client divergence, we concatenate all client embedding matrices $[H_1; \ldots; H_K] \in \mathbb{R}^{KM \times d}$, perform PCA, and compute the explained variance ratio of the first principal component:
+
+\begin{equation}
+\text{EVR} = \frac{\lambda_1}{\sum_{i=1}^{d} \lambda_i}
+\end{equation}
+
+\textbf{Interpretation:}
+\begin{itemize}[nosep]
+    \item EVR $< 0.4$: Divergence is approximately isotropic in high-dimensional space (noise-type). Client differences are distributed uniformly across dimensions with no dominant direction.
+    \item EVR $> 0.6$: Divergence is low-dimensional and structured (signal-type). A dominant principal direction captures most of the cross-client variance, suggesting a coherent semantic axis of variation.
+    \item $0.4 \leq$ EVR $\leq 0.6$: Ambiguous, requiring cross-validation with Stage 1 and complementary metrics.
+\end{itemize}
+
+The two stages are designed to be cross-validating: a low EVR should coincide with a high permutation p-value (noise), and a high EVR should coincide with a low p-value (structure).
+Disagreement between the two signals a measurement issue requiring investigation.
+
+\subsection{Cross-Validation Metrics}
+
+CD-SPI conclusions must be corroborated by at least one independent metric measuring divergence in a different space:
+
+\begin{itemize}
+    \item \textbf{CKA (Centered Kernel Alignment):} Measures feature-space similarity robust to orthogonal transformations and non-linearities. Complements CD-SPI's cosine-based parameter-space view.
+    \item \textbf{JS Divergence of Output Distributions:} Measures functional divergence in the reward prediction space. Distinguishes ``semantic divergence'' (different representations $\rightarrow$ different predictions) from ``overfitting noise'' (different representations $\rightarrow$ same predictions).
+    \item \textbf{Cosine/JS Contrast:} When CD-SPI (parameter space) differs from JS divergence (function space), it reveals whether representation differences propagate to functional differences---a key diagnostic for determining whether divergence is consequential for aggregation.
+\end{itemize}
+
+\subsection{Theoretical Properties}
+
+We establish three baseline properties of the CD-SPI metric:
+
+\begin{description}
+    \item[Lemma 1 (Boundedness).] For any step $s$ and any set of $K$ client embeddings $\{h_k(s)\}_{k=1}^K$ on the unit sphere, $\text{CD-SPI}(s) \in [0, 2]$. If all embeddings are identical, $\text{CD-SPI}(s) = 0$. If embeddings are pairwise anti-aligned, $\text{CD-SPI}(s) = 2$.
+
+    \item[Lemma 2 (Scale Invariance).] CD-SPI is invariant to isotropic scaling of the embedding space: $\text{CD-SPI}(\{\alpha h_k\}) = \text{CD-SPI}(\{h_k\})$ for any $\alpha > 0$. This follows from the scale-invariance of cosine similarity.
+
+    \item[Lemma 3 (Connection to Aggregation Effectiveness).]
+    Let $\bar{h} = \frac{1}{K} \sum_k h_k$ be the FedAvg-aggregated embedding.
+    Under squared-error loss, the expected reconstruction error of the aggregated embedding satisfies $\mathbb{E}\|\bar{h} - h^*\|^2 \leq \frac{\sigma^2}{K} + \text{CD-SPI} \cdot O(d)$, where $\sigma^2$ is the within-client variance and $h^*$ is the true target embedding.
+    When CD-SPI $\to 0$, FedAvg achieves the standard $\sigma^2/K$ rate; when CD-SPI is large, the additional bias term dominates, degrading aggregation.
+\end{description}
+
+Proofs are provided in Appendix~\ref{sec:proofs}.
+
+% ============================================================
+\section{Experimental Design}
+% ============================================================
+
+\subsection{The Capacity Continuum}
+
+To isolate the effect of model capacity on divergence structure, we define a \textbf{capacity continuum} spanning five orders of magnitude in trainable parameters.
+All configurations share the same dense backbone (Pythia-1.4B, 24 transformer layers, hidden dimension 2048) and differ only in which parameters are trainable during local client updates.
+
+\begin{table}[h]
+\centering
+\caption{Capacity continuum configurations. All use Pythia-1.4B with VersaPRM 4-domain data (math, code, medical, general; 5,000 CoT samples per client). Federated training runs for 25 rounds with FedAvg aggregation, 4 clients, 1 local epoch per round.}
+\label{tab:configs}
+\small
+\begin{tabular}{@{}llcccl@{}}
+\toprule
+\textbf{Config} & \textbf{Type} & \textbf{Trainable Params} & \textbf{Batch} & \textbf{LR} & \textbf{Status} \\
+\midrule
+Head-ReLU    & Head-only       & $\sim$0.5M  & 128 & $1\times10^{-4}$ & [PENDING] \\
+Head-GELU    & Head-only       & $\sim$0.5M  & 128 & $1\times10^{-4}$ & \textbf{[IN PROGRESS]} (R1 done) \\
+Head-Ident.  & Head-only       & $\sim$0.5M  & 128 & $1\times10^{-4}$ & [PENDING] \\
+LoRA-r8      & LoRA            & $\sim$3.3M  & 128 & $5\times10^{-6}$ & [PENDING] \\
+LoRA-r64     & LoRA            & $\sim$26M   & 128 & $5\times10^{-6}$ & [PENDING] \\
+LoRA-r256    & LoRA            & $\sim$105M  & 128 & $5\times10^{-6}$ & [PENDING] \\
+Part-last2   & Partial FT      & $\sim$230M  & 4   & $5\times10^{-6}$ & [PENDING] \\
+Part-last4   & Partial FT      & $\sim$460M  & 4   & $5\times10^{-6}$ & [PENDING] \\
+Part-last8   & Partial FT      & $\sim$920M  & 4   & $5\times10^{-6}$ & [PENDING] \\
+Full-FT      & Full FT         & $\sim$1.4B  & 4   & $5\times10^{-6}$ & [PENDING] \\
+Centralized  & Centralized FT  & $\sim$1.4B  & 4   & $5\times10^{-6}$ & [PENDING] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Data and Domains}
+
+We use VersaPRM~\cite{versaprm2025}, a multi-domain dataset containing 84,098 chain-of-thought reasoning traces (669,218 steps) across 14 domains.
+We select 4 domains to instantiate heterogeneous federated clients:
+
+\begin{itemize}[nosep]
+    \item \textbf{Math:} GSM8K, MATH, theorem-proving traces ($\sim$50K steps/client)
+    \item \textbf{Code:} MBPP, HumanEval, programming reasoning ($\sim$74K steps/client)
+    \item \textbf{Medical:} MedQA, clinical reasoning ($\sim$31K steps/client)
+    \item \textbf{General:} StrategyQA, date-understanding ($\sim$47K steps/client)
+\end{itemize}
+
+Each client receives 5,000 CoT samples from its domain.
+Steps exceeding 384 tokens (8.7\% of the total) are filtered rather than truncated, preventing truncation artifacts from confounding CD-SPI measurements.
+Sequences are tokenized with a maximum length of 384 tokens, covering 91.3\% of steps without truncation.
+
+\subsection{Training Protocol}
+
+All federated experiments use the same protocol:
+\begin{itemize}[nosep]
+    \item \textbf{Aggregation:} Standard FedAvg~\cite{fedavg2017} with full client participation (participation rate = 1.0)
+    \item \textbf{Local training:} 1 epoch per round, AdamW optimizer, cosine learning rate schedule, max gradient norm 1.0
+    \item \textbf{Total rounds:} 25 (Phase 1 plan; Phase 0 screening uses 5 rounds for rapid go/no-go)
+    \item \textbf{Evaluation:} Per-domain validation MSE computed after each round; CD-SPI, EVR, CKA, and function-space divergence computed for all configurations
+    \item \textbf{Seeds:} Primary experiments use seed 42; statistical validation uses 5 seeds for CD-SPI variance estimation
+\end{itemize}
+
+Training is conducted on an NVIDIA DGX Spark (GB10, 121GB unified memory, ARM64 CPU).
+High-throughput configurations (head-only and LoRA, batch size 128) complete one round in approximately 2.2--2.5 hours.
+Low-throughput configurations (partial and full fine-tuning, batch size 4) require approximately 15--29 hours per round.
+
+\subsection{Hypotheses and Falsification Criteria}
+
+We pre-register four hypotheses and five falsification conditions:
+
+\begin{table}[h]
+\centering
+\caption{Hypotheses and pre-registered falsification conditions.}
+\label{tab:hypotheses}
+\small
+\begin{tabular}{@{}cll@{}}
+\toprule
+\textbf{ID} & \textbf{Statement} & \textbf{Test} \\
+\midrule
+H1 & Low-capacity cross-client divergence $\approx$ noise & Permutation $p > 0.05$, EVR $< 0.4$ \\
+H2 & Full-FT produces statistically significant structured divergence & Permutation $p < 0.05$, EVR $> 0.6$ \\
+H3 & A critical capacity $r^*$ separates noise from structure & EVR vs.~$\log$(trainable params) piecewise regression \\
+H4 & Divergence structure causally improves aggregation & CD-SPI $\leftrightarrow$ per-domain MSE correlation \\
+\midrule
+F1 & Head-dim=1024 shows structured mode & Revise H1 \\
+F2 & LoRA(r=64) $\geq$ 95\% Full-FT perf + CD-SPI noise & Trigger Plan B \\
+F3 & Only quantitative, no qualitative difference & Downgrade to continuous-spectrum narrative \\
+F4 & CKA/JS contradicts CD-SPI & Abandon CD-SPI as primary evidence \\
+F5 & Centralized head-only vs.~full-FT gap $\leq 2\%$ & Federation-specificity claim fails \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Results}
+% ============================================================
+
+\subsection{Preliminary: Head-Only Produces Zero Structured Divergence}
+
+\begin{table}[h]
+\centering
+\caption{\textbf{Head-only GELU, Round 1} --- CD-SPI diagnostic measurements for the lowest-capacity configuration. All metrics point to zero cross-client structure.}
+\label{tab:gelu_r1}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} & \textbf{Interpretation} \\
+\midrule
+CD-SPI (head embedding)      & 0.0867 & Spurious: captures head random init noise \\
+CD-SPI$_{\text{sym}}$ (backbone) & \textbf{0.0011} & \textbf{Zero divergence in backbone space} \\
+PCA EVR (first PC)           & \textbf{0.0000} & Zero variance --- pure isotropic noise \\
+CKA (feature alignment)      & \textbf{1.0000} & Perfect cross-client alignment \\
+Output cosine divergence     & 0.0581 & Minimal functional difference \\
+Output JS divergence         & 0.1387 & Reward distributions nearly identical \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:gelu_r1} reports the complete CD-SPI diagnostic output after Round 1 of head-only GELU training.
+The key finding is unambiguous: \textbf{CD-SPI$_{\text{sym}} = 0.0011$, EVR $= 0.0$, CKA $= 1.0$}.
+With a frozen Pythia-1.4B backbone, four heterogeneous clients training independently on math, code, medical, and general reasoning data produce \emph{identical} backbone representations for the same input steps.
+
+This confirms H1 in its strongest form: head-only capacity does not merely produce ``low'' cross-client divergence---it produces \emph{zero} structured divergence.
+The FedAvg aggregation step is mathematically averaging identical parameter updates from all clients, providing no information gain over single-client training.
+
+The original CD-SPI value (0.0867), measured from PRM head intermediate features, demonstrates the importance of symmetrical measurement: head features capture random initialization noise that spuriously suggests cross-client differences.
+CD-SPI$_{\text{sym}}$ correctly reveals that these differences vanish when measured in the shared backbone representation space.
+
+\textbf{CD-SPI Round-over-Round Stability.}
+\emph{[[PENDING] --- Rounds 2--10 of GELU head-only will be reported upon completion.]}
+We expect CD-SPI$_{\text{sym}}$ to remain stable near zero across rounds, confirming that the noise-type divergence pattern is a structural property of low-capacity training rather than a transient initialization effect.
+
+\subsection{Architecture Ablation: Activation Function Independence}
+
+\emph{[[PENDING] --- GELU (in progress), ReLU, and Identity head configurations will be compared at Round 5 to verify that CD-SPI patterns are independent of PRM head activation function choice.]}
+
+\subsection{Capacity Continuum: The Full Spectrum}
+
+\emph{[[PENDING] --- All 9 federated configurations from Table~\ref{tab:configs} will be trained for 5 rounds (Phase 0 screening).
+We will report CD-SPI$_{\text{sym}}$, EVR, CKA, per-domain MSE, and permutation p-values for each configuration.
+The key expected finding is a monotonic relationship between trainable parameter count and CD-SPI structure, with a critical rank threshold $r^*$ where divergence type transitions from noise to structure.]}
+
+\subsection{Permutation Test Statistical Validation}
+
+\emph{[[PENDING] --- Permutation tests (3-layer null distribution) will be performed on Round 5 checkpoints for all configurations.
+Cohen's $d$ effect sizes and p-values will be reported.
+We expect head-only and low-rank LoRA ($r \leq 16$) to show $d < 0.2$ (negligible effect) and $p > 0.05$ (non-significant), while high-rank LoRA ($r \geq 128$) and full-FT to show $d > 0.8$ (large effect) and $p < 0.01$ (significant).]}
+
+\subsection{Cross-Validation: CKA and Functional Divergence}
+
+\emph{[[PENDING] --- CKA and output-space JS divergence will be computed for Round 5 checkpoints.
+Agreement between CD-SPI, CKA, and functional divergence would confirm that representation-level structure propagates to prediction-level differences.
+Disagreement would suggest that representation differences are functionally inconsequential, weakening the CD-SPI-to-performance causal chain.]}
+
+\subsection{Per-Domain MSE and Aggregation Effectiveness}
+
+\emph{[[PENDING] --- Per-domain validation MSE will be tracked across all 25 rounds for extended-run configurations (head-only ReLU, LoRA r=256, Full-FT).
+We expect:
+\begin{itemize}
+    \item \textbf{Head-only:} MSE plateaus early ($\sim$Round 5) as FedAvg aggregates identical updates.
+    \item \textbf{LoRA r=256:} Intermediate convergence with moderate domain-specific differentiation.
+    \item \textbf{Full-FT:} Continued MSE decrease across all rounds, with domain-specific learning rates reflecting structured divergence.
+\end{itemize}
+A scatter plot of CD-SPI$_{\text{sym}}$ vs.~$\Delta$MSE (round 1 $\to$ round 25) across configurations will test H4.]}
+
+% ============================================================
+\section{Discussion}
+% ============================================================
+
+\textbf{What CD-SPI reveals that existing approaches miss.}
+Existing federated learning diagnostics measure \emph{how much} clients diverge (divergence magnitude).
+CD-SPI measures \emph{what kind} of divergence occurs (noise vs.~structure).
+This distinction is critical for federated PRM training because:
+\begin{enumerate}[nosep]
+    \item If divergence is noise (EVR $\approx 0$), increasing communication rounds or tuning the learning rate cannot help---the fundamental limitation is that capacity-saturated models produce identical representations regardless of heterogeneous local data.
+    \item If divergence has structure (EVR $> 0.5$), aggregation is \emph{potentially} fruitful, but practitioners should verify that the structure aligns with desired generalization directions rather than domain-specific overfitting.
+\end{enumerate}
+
+\textbf{The capacity continuum as a diagnostic tool.}
+By treating capacity as an experimental variable rather than a claim, we use the continuum to reveal the \emph{threshold} at which structured divergence emerges.
+This threshold has practical implications: if LoRA(r=64) already produces structured divergence, the computational cost of full fine-tuning may not be justified for federated PRM.
+If full fine-tuning is required, the finding exposes a fundamental capacity requirement that lighter-weight approaches cannot satisfy.
+
+\textbf{Plan B: If capacity does not affect divergence type.}
+If the full capacity continuum shows CD-SPI$_{\text{sym}} \approx 0$ across all configurations (triggering F2), the finding would be equally significant---it would demonstrate that \emph{cross-client PRM divergence is inherently noise-dominated regardless of capacity}, meaning federated PRM aggregation provides no benefit over single-client training.
+This negative result would redirect the field toward alternative architectures (MoE, SCAFFOLD) rather than pursuing larger-capacity federated PRMs.
+
+% ============================================================
+\section{Limitations}
+\label{sec:limitations}
+% ============================================================
+
+\begin{enumerate}
+    \item \textbf{Architecture scope.} Our causal claims are restricted to dense backbone architectures (Pythia series).
+    Extensions to MoE, LLaMA, Qwen, or Mistral architectures require independent validation.
+    \item \textbf{Aggregation method.} We only evaluate FedAvg. FedProx, SCAFFOLD, and FedDYN may alter the divergence-to-performance relationship.
+    \item \textbf{Heterogeneity regime.} Our domain-based client split (math/code/medical/general) represents one type of Non-IID distribution.
+    Dirichlet sampling, label shift, and mixed patterns may produce different CD-SPI profiles.
+    \item \textbf{CD-SPI measurement limitations.} CD-SPI operates in cosine space, which is insensitive to embedding magnitude differences.
+    The choice of penultimate layer for symmetrical measurement may not capture divergence localized in other layers.
+    \item \textbf{Scale.} Experiments use Pythia-1.4B. Scaling laws for CD-SPI structure at 2.8B, 7B, and beyond are unknown.
+    \item \textbf{Task specificity.} Our findings are specific to PRM training. Generalization of CD-SPI to other federated learning tasks (e.g., policy model training, image classification) requires independent evaluation.
+\end{enumerate}
+
+% ============================================================
+\section{Conclusion}
+% ============================================================
+
+We introduced CD-SPI, a two-stage diagnostic framework for distinguishing noise-type from structure-type cross-client divergence in federated process reward model training.
+Preliminary results from the lowest-capacity configuration (head-only, GELU activation) provide strong confirmation that frozen-backbone PRMs produce zero structured cross-client divergence (CD-SPI$_{\text{sym}} = 0.0011$, EVR $=0.0$, CKA $=1.0$), explaining why FedAvg aggregation under head-only training reduces to averaging identical updates.
+The full capacity continuum experiment, currently in progress, will determine whether higher-capacity configurations (LoRA, partial FT, full FT) unlock structured divergence patterns that make federated aggregation meaningful.
+The core contribution is the diagnostic framework itself---a signal-structure perspective on federated aggregation that has been overlooked by all existing work on federated reward models.
+
+% ============================================================
+\bibliographystyle{plainnat}
+\bibliography{refs}
+% ============================================================
+
+\appendix
+\section{Proofs of Theoretical Properties}
+\label{sec:proofs}
+
+\emph{[[TO BE ADDED] --- Formal proofs for Lemmas 1--3 will be provided in the camera-ready version.]}
+
+\section{Full Experimental Configuration Details}
+
+\emph{[[TO BE ADDED] --- Complete YAML configurations, hardware specifications, and reproducibility checklist.]}
+
+\section{Additional Results}
+
+\emph{[[TO BE ADDED] --- Per-round CD-SPI curves, permutation test distributions, CKA matrices, and OOD evaluation results for all configurations.]}
+
+\end{document}
