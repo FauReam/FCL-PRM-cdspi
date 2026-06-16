@@ -17,6 +17,69 @@
 
 ---
 
+## Phase 0-Verify：二元极值验证（优先执行，~24h 出结论）
+
+### 目的
+
+在全量 Phase 0 扫 9 个 config 之前，先用**容量谱两端**的极值点快速验证核心命题：
+
+> 低容量 = CD-SPI 噪声 (EVR ≈ 0)，高容量 = CD-SPI 结构化信号 (EVR > 0)
+
+如果这个二元对比都看不到信号差异，那全量扫 9 个 config 也是浪费时间。
+
+### 实验设计
+
+| 角色 | 配置 | batch | rounds | 预计耗时 | 要验证的命题 |
+|:---|:---|:---:|:---:|:---:|:---|
+| 🔵 低容量锚点 | `m3_fedavg_head_1.4b_gelu` (GELU) | 128 | ✅ **已完成 R1-2** | 0h | H1: CD-SPI≈0, 噪声 |
+| 🔵 低容量复证 | `m3_fedavg_head_1.4b` (ReLU) | 128 | 5 | ~11h | H1 跨激活函数一致性 |
+| 🔴 高容量探针 | `m3_fedavg_lora_r256_1.4b` | 128 | 5 | ~12.5h | H2: CD-SPI>0, 结构信号 |
+
+> **为什么选 LoRA r=256 而不是 full FT？** LoRA r=256 是 batch=128 组里容量最高的配置，12.5h 出 5 轮数据，符合"一天内验证"原则。full FT 跑 5 轮需要 6 天，留给 Phase 0 主阶段。
+
+### 判断标准
+
+| 结果 | GELU CD-SPI sym | LoRA r=256 CD-SPI sym | 判定 | 行动 |
+|:---|:---:|:---:|:---|:---|
+| 🟢 阳性 | < 0.01, EVR ≈ 0 | > 0.01, EVR > 0.3 | 容量-发散因果链成立 | 进入 Phase 0 全量扫 |
+| 🟡 弱阳性 | < 0.01, EVR ≈ 0 | 0.005-0.01, EVR 0.1-0.3 | 趋势存在但弱 | 增加 LoRA r=64 对比后再决定 |
+| 🔴 阴性 | < 0.01 | < 0.01, EVR ≈ 0 | 容量不影响发散类型 | **触发 Plan B** |
+
+### 已有数据：GELU Round 1 完整诊断
+
+```
+CD-SPI (symmetrical backbone):  0.0011  ← 几乎为零！
+PCA EVR:                        0.0000  ← 零方差，纯噪声
+CKA:                            1.0000  ← 跨客户端完美一致
+Function divergence (cos):      0.0581  ← 函数空间差异也极小
+Function divergence (JS):       0.1387
+```
+
+> **解读**：frozen backbone + head-only 训练后，4 个客户端从 backbone 倒数第二层提取的 hidden state **完全一致**——无论 client 是 math/code/medical/general，Pythia-1.4B 对同一步骤的表示没有任何差异。这正是 H1 预测的"噪声型发散"（其实是零发散）。联邦聚合在这种情况下不产生有意义的信息，FedAvg 只是在平均完全相同的参数更新。
+
+### 执行命令
+
+```bash
+cd /home/jiayu/FCL-PRM && source venv/bin/activate
+
+# Step 1: head-only ReLU 5r（低容量复证）
+nohup python scripts/run_federated.py \
+  --config configs/m3_fedavg_head_1.4b.yaml \
+  --rounds 5 &
+
+# Step 2: LoRA r=256 5r（高容量探针）
+nohup python scripts/run_federated.py \
+  --config configs/m3_fedavg_lora_r256_1.4b.yaml \
+  --rounds 5 &
+```
+
+### 产出
+
+- `VERIFICATION_REPORT.html` — 含 GELU 已有数据 + ReLU + LoRA r=256 对比
+- 上传到 GitHub，作为 Phase 0 的 go/no-go 决策依据
+
+---
+
 ## 阶段总览
 
 ```
