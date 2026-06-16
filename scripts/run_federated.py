@@ -234,6 +234,10 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Enable cuDNN auto-tuner for consistent input shapes (10-20% speedup).
+    if device == "cuda":
+        torch.backends.cudnn.benchmark = True
+
     # Load dtype: BF16 saves ~33% memory vs FP32; especially important for full FT.
     freeze_backbone = config.get("model.freeze_backbone", True)
     load_dtype = torch.bfloat16 if device == "cuda" else torch.float32

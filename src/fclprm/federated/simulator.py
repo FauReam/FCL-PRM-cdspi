@@ -130,14 +130,19 @@ class FederatedSimulator:
 
         self.clients: list[FederatedClient] = []
         for i in range(num_clients):
-            client_model = (
-                type(global_model)(
+            if hasattr(global_model, "backbone"):
+                client_model = type(global_model)(
                     backbone=global_model.backbone,
                     head_dim=global_model.head.head_dim,
+                    freeze_backbone=global_model.freeze_backbone,
+                    attnres=global_model.attnres_config,
+                    lora_config=global_model.lora_config,
+                    partial_ft_layers=global_model.partial_ft_layers,
+                    partial_ft_mode=global_model.partial_ft_mode,
+                    head_activation=global_model.head_activation,
                 )
-                if hasattr(global_model, "backbone")
-                else global_model
-            )
+            else:
+                client_model = global_model
 
             client = FederatedClient(
                 client_id=i,
@@ -160,6 +165,10 @@ class FederatedSimulator:
             if hasattr(global_model, "head")
             else 256
         )
+        # Persistent eval model: backbone loaded once from HF Hub, reused
+        # every round via in-memory load_state_dict.  Eliminates per-round
+        # disk I/O (~2.8 GB/round) and GPU-CPU-GPU ping-pong (~5.6 GB/round).
+        self._eval_model: nn.Module | None = None
 
         self.history: list[dict] = []
 
@@ -182,12 +191,13 @@ class FederatedSimulator:
         global_model.eval()
 
         metrics: dict[str, float] = {}
-        with torch.no_grad():
+        with torch.inference_mode():
             for client in tqdm(self.clients, desc="[Eval] Per-domain", leave=True):
                 loader = DataLoader(
                     client.train_data,
                     batch_size=batch_size,
                     collate_fn=collate_step_batch,
+                    pin_memory=True,
                 )
                 total_mse = 0.0
                 num_batches = 0
@@ -218,7 +228,7 @@ class FederatedSimulator:
         client.model.eval()
         input_ids = self.anchor_inputs["input_ids"].to(extract_device)
         attention_mask = self.anchor_inputs["attention_mask"].to(extract_device)
-        with torch.no_grad():
+        with torch.inference_mode():
             embs = client.model.get_head_embedding(input_ids, attention_mask)
         client.model.to(device)
         return embs.detach().cpu()
@@ -248,7 +258,7 @@ class FederatedSimulator:
             client.model.eval()
             input_ids = self.anchor_inputs["input_ids"].to(eval_device)
             attention_mask = self.anchor_inputs["attention_mask"].to(eval_device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 embs = client.model.get_head_embedding(input_ids, attention_mask)
             all_client_embeddings[str(client.client_id)] = [
                 e for e in embs.detach().cpu()
@@ -296,7 +306,7 @@ class FederatedSimulator:
             client.model.eval()
             input_ids = self.anchor_inputs["input_ids"].to(eval_device)
             attention_mask = self.anchor_inputs["attention_mask"].to(eval_device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 # Use backbone penultimate layer for symmetrical measurement
                 embs = client.model.get_backbone_embedding(input_ids, attention_mask)
             all_client_embeddings[str(client.client_id)] = [
@@ -359,7 +369,7 @@ class FederatedSimulator:
         input_ids = self.anchor_inputs["input_ids"].to(device)
         attention_mask = self.anchor_inputs["attention_mask"].to(device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for client in self.clients:
                 client.model.to(device)
                 client.model.eval()
@@ -405,7 +415,7 @@ class FederatedSimulator:
         ood_splits = build_cross_domain_test_splits(
             self.client_data, self.ood_domains
         )
-        with torch.no_grad():
+        with torch.inference_mode():
             results = evaluate_cross_domain(
                 global_model, tokenizer, ood_splits,
                 device=device, batch_size=batch_size,
@@ -428,7 +438,7 @@ class FederatedSimulator:
             flip_ratios=self.label_noise_ratios,
             seed=self.seed,
         )
-        with torch.no_grad():
+        with torch.inference_mode():
             results = evaluate_label_noise_robustness(
                 global_model, test_sets,
                 device=device, batch_size=batch_size,
@@ -702,49 +712,39 @@ class FederatedSimulator:
             per_domain: dict[str, float] = {}
 
             if not self.skip_eval:
-                # ---- GPU Isolation: Save -> Clear -> Reload for Validation ----
-                temp_path = Path(f"./.temp_model_r{round_num}.pt")
-                state = {
-                    k: v.cpu() for k, v in self.server.get_global_model().state_dict().items()
-                }
-                torch.save(state, temp_path)
-                del state
+                # ---- Persistent eval model (one-time HF load, in-memory transfer) ----
+                if self._eval_model is None:
+                    from transformers import AutoModel
+                    from fclprm.models.base_wrapper import StepRewardModel
 
-                # Move original models to CPU to free GPU
-                self.global_model.cpu()
-                for client in self.clients:
-                    client.model.cpu()
-                torch.cuda.empty_cache()
-                tqdm.write("  [GPU] Cleared after training")
+                    _backbone = AutoModel.from_pretrained(
+                        self._backbone_name,
+                        torch_dtype=torch.bfloat16,
+                    )
+                    self._eval_model = StepRewardModel(
+                        backbone=_backbone,
+                        head_dim=self._head_dim,
+                    )
+                    self._eval_model.to(device)
+                    self._eval_model.eval()
+                    tqdm.write("  [GPU] Persistent eval model initialized")
 
-                # Re-create a fresh GPU model copy for validation
-                from transformers import AutoModel
-                from fclprm.models.base_wrapper import StepRewardModel
+                # Aggregate first (updates training model in-place on CPU).
+                self.server.aggregate(client_updates)
 
-                val_backbone = AutoModel.from_pretrained(
-                    self._backbone_name,
-                    torch_dtype=torch.float32,
+                # Copy post-aggregation weights into eval model (in-memory,
+                # no disk I/O).  Training models stay on GPU — no ping-pong.
+                self._eval_model.load_state_dict(
+                    self.server.get_global_model().state_dict()
                 )
-                val_model = StepRewardModel(
-                    backbone=val_backbone,
-                    head_dim=self._head_dim,
-                )
-                val_model.load_state_dict(torch.load(str(temp_path), map_location=device))
-                val_model.to(device)
-                val_model.eval()
-                # Temporarily replace server model with validation copy
+
+                # Swap eval model in for per-domain evaluation.
                 original_model = self.server.global_model
-                self.server.global_model = val_model
+                self.server.global_model = self._eval_model
 
                 # NOTE: CD-SPI is already computed above (pre-aggregation, using
                 # client-specific models). Do NOT recompute here with the global
                 # validation copy, as that would always yield ~0.
-
-                # Server aggregation (on CPU, only head parameters)
-                self.server.global_model = original_model
-                self.server.aggregate(client_updates)
-                # Swap back to validation copy for eval
-                self.server.global_model = val_model
 
                 # Per-domain evaluation (post-aggregation global model)
                 if (round_num + 1) % self.eval_every == 0:
@@ -777,18 +777,9 @@ class FederatedSimulator:
                     if label_noise_results:
                         tqdm.write(f"  [Label Noise] {label_noise_results}")
 
-                # Clean up validation copy and restore original model
+                # Restore training model.  No cleanup needed — eval model
+                # is persistent and reused next round.
                 self.server.global_model = original_model
-                del val_model
-                del val_backbone
-                torch.cuda.empty_cache()
-                tqdm.write("  [GPU] Cleared after eval")
-
-                # Move original models back to GPU for next round
-                self.global_model.to(device)
-                for client in self.clients:
-                    client.model.to(device)
-                temp_path.unlink(missing_ok=True)
             else:
                 # Train-only mode: skip all eval, just aggregate
                 self.server.aggregate(client_updates)

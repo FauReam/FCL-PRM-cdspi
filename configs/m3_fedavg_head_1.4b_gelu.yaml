@@ -48,8 +48,9 @@ evaluation:
 logging:
   log_dir: "./experiments/M3_head_gelu_1.4b/results/logs"
   checkpoint_dir: "./experiments/M3_head_gelu_1.4b/results/checkpoints"
-  save_every: 5
+  save_every: 1
+  save_client_checkpoints: true
 
 hardware:
   device: "cuda"
-  num_workers: 0
+  num_workers: 4

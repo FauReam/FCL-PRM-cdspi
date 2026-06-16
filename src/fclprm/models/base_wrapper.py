@@ -317,17 +317,12 @@ class StepRewardModel(nn.Module):
             or self._lora_applied
             or self.partial_ft_layers > 0
         )
-        ctx = torch.no_grad() if not backbone_needs_grad else torch.enable_grad()
-        with ctx:
-            if backbone_needs_grad:
-                with torch.autocast(
-                    device_type="cuda", dtype=torch.bfloat16
-                ):
-                    outputs = self.backbone(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                    )
-            else:
+        # Always use autocast: the frozen-backbone path was previously
+        # running in FP32 (torch.no_grad disables autograd, not dtype
+        # casting), wasting ~2x compute and memory bandwidth vs BF16.
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            grad_ctx = torch.no_grad() if not backbone_needs_grad else torch.enable_grad()
+            with grad_ctx:
                 outputs = self.backbone(
                     input_ids=input_ids,
                     attention_mask=attention_mask,

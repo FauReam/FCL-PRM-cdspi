@@ -1,5 +1,7 @@
 # FCL-PRM — Claude Code 项目上下文
 
+> **新会话必读**：[SESSION_NOTES.md](SESSION_NOTES.md) — 硬件限制、已知 Bug、数据统计、性能权衡、配置速查
+
 ## 项目简介
 Federated Continual Process Reward Model (联邦持续过程奖励模型)。
 跨机构联邦学习协同训练 step-level PRM。**当前方向：CD-SPI 发散结构诊断框架**（详见 PROJECT_FRAMEWORK.md）：
@@ -90,7 +92,7 @@ python scripts/run_federated.py --config configs/smoke_versaprm.yaml --rounds 5
 
 ## 工作约定
 - 提交信息用英文，遵循 `fix(scope): description` 格式
-- 主分支：`main`（远程 `origin` 为 `https://github.com/FauReam/FCL-PRM-fullft.git`）
+- 主分支：`main`（远程 `origin` 为 `https://github.com/FauReam/FCL-PRM-cdspi.git`）
 - **训练代码规范**：详见 [TRAINING_CONVENTIONS.md](TRAINING_CONVENTIONS.md) — 进度条、检查点、错误栈、运行日志、终端断开存活 5 条强制要求
 - **终端命令格式**：当用户索要运行命令时，必须以换行续行的代码块给出。每行不超过 50 字符，用 `\` 折行。禁止单行超长命令。
 

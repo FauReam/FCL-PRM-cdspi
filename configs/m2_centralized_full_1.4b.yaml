@@ -40,4 +40,4 @@ logging:
 
 hardware:
   device: "cuda"
-  num_workers: 0
+  num_workers: 4

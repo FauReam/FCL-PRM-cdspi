@@ -58,9 +58,6 @@ class FederatedClient:
         max_steps_per_epoch: int | None = None,
         num_workers: int = 0,
     ) -> dict:
-        # Belt-and-suspenders: YAML 1.1 parses "1e-4" as string, not float.
-        learning_rate = float(learning_rate)
-
         """Run local training for specified epochs.
 
         Args:
@@ -79,6 +76,8 @@ class FederatedClient:
         Returns:
             Dict containing model state dict and training metrics.
         """
+        # Belt-and-suspenders: YAML 1.1 parses "1e-4" as string, not float.
+        learning_rate = float(learning_rate)
         self.model.to(device)
         self.model.train()
 
@@ -197,7 +196,7 @@ class FederatedClient:
         raw_model = model._module if hasattr(model, "_module") else model
         return {
             "client_id": self.client_id,
-            "state_dict": {k: v.cpu().clone() for k, v in raw_model.state_dict().items()},
+            "state_dict": {k: v.cpu() for k, v in raw_model.state_dict().items()},
             "loss": avg_loss,
             "num_samples": len(self.train_data),
             "num_batches": num_batches,
