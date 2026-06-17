@@ -128,10 +128,19 @@ class FederatedSimulator:
             anchor_steps=self.anchor_steps,
         )
 
+        # torch.compile wraps the model in an OptimizedModule; we need the
+        # original class to instantiate client models.  Attribute access
+        # (e.g. .backbone) still works through the wrapper.
+        _base_model = (
+            global_model._orig_mod
+            if hasattr(global_model, "_orig_mod")
+            else global_model
+        )
+
         self.clients: list[FederatedClient] = []
         for i in range(num_clients):
             if hasattr(global_model, "backbone"):
-                client_model = type(global_model)(
+                client_model = type(_base_model)(
                     backbone=global_model.backbone,
                     head_dim=global_model.head.head_dim,
                     freeze_backbone=global_model.freeze_backbone,

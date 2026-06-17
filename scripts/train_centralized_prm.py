@@ -119,6 +119,10 @@ def main() -> None:
     parser.add_argument(
         "--resume", type=str, default=None, help="Path to checkpoint to resume from"
     )
+    parser.add_argument(
+        "--rounds", type=int, default=None,
+        help="(ignored; accepted for batch-script compatibility with federated entrypoints)"
+    )
     args = parser.parse_args()
 
     config = ExperimentConfig(args.config)
