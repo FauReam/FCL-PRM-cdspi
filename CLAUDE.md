@@ -93,9 +93,10 @@ python scripts/run_federated.py --config configs/smoke_versaprm.yaml --rounds 5
 ## 工作约定
 - 提交信息用英文，遵循 `fix(scope): description` 格式
 - 主分支：`main`（远程 `origin` 为 `https://github.com/FauReam/FCL-PRM-cdspi.git`）
-- **训练代码规范**：详见 [TRAINING_CONVENTIONS.md](TRAINING_CONVENTIONS.md) — 进度条、检查点、错误栈、运行日志、终端断开存活 5 条强制要求
+- **训练代码规范**：详见 [TRAINING_CONVENTIONS.md](TRAINING_CONVENTIONS.md) — 进度条、检查点、错误栈、运行日志、终端断开存活、修改日志 7 条强制要求
 - **Claude Code 启动训练规则**：任何 >1h 的训练必须用 `nohup` + `&` 启动，只返回 PID，日志写入项目 `experiments/` 目录，禁止流式输出到 Claude 对话。详见 [TRAINING_CONVENTIONS.md §0.5](TRAINING_CONVENTIONS.md#05-claude-code-启动训练程序规则强制性)
 - **终端命令格式**：当用户索要运行命令时，必须以换行续行的代码块给出。每行不超过 50 字符，用 `\` 折行。禁止单行超长命令。
+- **修改日志**：效率/算法类代码变更必须同时写入 [docs/CHANGELOG.md](docs/CHANGELOG.md)，commit message 中引用条目。详见 [TRAINING_CONVENTIONS.md §7](TRAINING_CONVENTIONS.md#7-修改日志-modification-log--效率与算法变更必须记录)
 
 ### 进度条（强制性）
 - tqdm 覆盖 rounds / clients / batches，每层有 desc / total / postfix

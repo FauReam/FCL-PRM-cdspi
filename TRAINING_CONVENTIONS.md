@@ -457,3 +457,89 @@ experiments/{exp_name}/
 | Tee 日志镜像 | `scripts/run_federated.py:135-193` | §4.2 Tee |
 | ExperimentLogger | `src/fclprm/utils/logging.py:8-47` | §4.4 JSONL |
 | GPU isolation (save→clear→reload) | `src/fclprm/federated/simulator.py:706-791` | — |
+
+---
+
+## 7. 修改日志 (Modification Log) — 效率与算法变更必须记录
+
+### 7.1 适用范围
+
+满足以下**任一**条件的代码变更，**必须**在 commit 前写入修改日志：
+
+| 触发条件 | 示例 |
+|----------|------|
+| **效率/性能优化** | 添加 `num_workers`、调整 batch_size、改用 `inference_mode`、启用 compile、GPU 内存优化 |
+| **算法/运算方法改进** | CD-SPI 计算方式变更、聚合策略调整、度量指标公式修改、损失函数替换 |
+| **架构级调整** | 新增 eval 阶段、DataLoader 并行策略、模型 forward 通路重构 |
+| **硬件适配** | ARM64 兼容性处理、CUDA 版本 workaround、内存不足降级策略 |
+
+以下情况**不需要**修改日志：
+
+- Bug fix（走 git commit message 即可）
+- 配置参数调整（已有 YAML 记录）
+- 注释/文档/格式化
+- 纯命名重构（不改变行为）
+
+### 7.2 日志存放位置
+
+```
+docs/decisions.md    ← 架构级决策（已有），记录 "为什么这样设计"
+docs/CHANGELOG.md    ← 效率/算法变更（需新建），记录 "改了什么 + 预期效果"
+```
+
+对于本文档第 7.1 节列出的变更类型，写入 `docs/CHANGELOG.md`。对于涉及 "为什么这样设计而非那样" 的架构决策，写入 `docs/decisions.md`。
+
+### 7.3 CHANGELOG 条目格式
+
+每条记录包含以下字段（markdown 表格）：
+
+```markdown
+## YYYY-MM-DD — 变更简述
+
+| 字段 | 内容 |
+|------|------|
+| **日期** | 2026-06-17 |
+| **类型** | 性能优化 / 算法改进 / 架构调整 / 硬件适配 |
+| **影响范围** | 受影响的文件列表 |
+| **变更前** | 一句话描述变更前的行为 |
+| **变更后** | 一句话描述变更后的行为 |
+| **预期效果** | 量化估算（如 "eval 阶段快 20-30%"） |
+| **风险** | 无 / 低 / 中 / 高 + 简述 |
+| **验证方式** | 如何确认变更生效 |
+| **关联 commit** | `abc1234` |
+```
+
+**要求**：
+- 每个 commit 若涉及上述触发条件，commit message 中引用 CHANGELOG 条目（如 `See: docs/CHANGELOG.md#2026-06-17`）
+- 预期效果尽可能量化，无法量化时给出定性估算（如 "略微改善"）
+- 风险如实评估，不写 "无风险" 除非确实 trivial
+
+### 7.4 Claude Code 自动执行规则
+
+当 Claude Code 完成效率/算法类代码修改后，必须：
+
+1. **修改代码** → 语法检查通过
+2. **创建/更新 `docs/CHANGELOG.md`**，按 §7.3 格式追加条目
+3. **commit message 中引用 CHANGELOG 条目**
+
+禁止：只改代码不写 CHANGELOG。
+
+### 7.5 CHANGELOG 模板
+
+```markdown
+# FCL-PRM 修改日志
+
+## 2026-06-17 — Eval DataLoader 多进程 + ARM64 compile 尝试
+
+| 字段 | 内容 |
+|------|------|
+| **日期** | 2026-06-17 |
+| **类型** | 性能优化 |
+| **影响范围** | `simulator.py`, `ood_eval.py`, `run_federated.py` |
+| **变更前** | Eval DataLoader 硬编码单进程；ARM64 直接跳过 torch.compile |
+| **变更后** | Eval DataLoader 支持 num_workers 多进程流水线；ARM64 尝试 compile 带降级 |
+| **预期效果** | eval 阶段快 20-30%；ARM64 compile 取决于 PyTorch 版本 |
+| **风险** | 低 — 所有新参数有默认值 0，向后兼容 |
+| **验证方式** | 语法检查通过；下次 `run_federated.py` 启动时观察日志 |
+| **关联 commit** | `8fc801b` |
+```
