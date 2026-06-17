@@ -171,6 +171,7 @@ def evaluate_cross_domain(
     device: str = "cuda",
     batch_size: int = 32,
     max_length: int = 512,
+    num_workers: int = 0,
 ) -> dict[str, dict[str, float]]:
     """Evaluate model on cross-domain OOD test sets.
 
@@ -195,16 +196,23 @@ def evaluate_cross_domain(
     model.eval()
 
     results: dict[str, dict[str, float]] = {}
-    with torch.no_grad():
+    with torch.inference_mode():
         for src_domain, ood_samples in ood_splits.items():
             if not ood_samples:
                 continue
-            loader = DataLoader(
-                ood_samples,
-                batch_size=batch_size,
-                shuffle=False,
-                collate_fn=collate_step_batch,
-            )
+            loader_kwargs: dict = {
+                "batch_size": batch_size,
+                "shuffle": False,
+                "collate_fn": collate_step_batch,
+                "pin_memory": True,
+            }
+            if num_workers > 0:
+                loader_kwargs.update({
+                    "num_workers": num_workers,
+                    "prefetch_factor": 2,
+                    "persistent_workers": True,
+                })
+            loader = DataLoader(ood_samples, **loader_kwargs)
             total_mse = 0.0
             n_batches = 0
             for batch in loader:
@@ -228,6 +236,7 @@ def evaluate_label_noise_robustness(
     test_sets: dict[str, list[dict]],
     device: str = "cuda",
     batch_size: int = 32,
+    num_workers: int = 0,
 ) -> dict[str, float]:
     """Evaluate model robustness under label perturbation.
 
@@ -248,16 +257,23 @@ def evaluate_label_noise_robustness(
     model.eval()
 
     results: dict[str, float] = {}
-    with torch.no_grad():
+    with torch.inference_mode():
         for noise_key, samples in test_sets.items():
             if not samples:
                 continue
-            loader = DataLoader(
-                samples,
-                batch_size=batch_size,
-                shuffle=False,
-                collate_fn=collate_step_batch,
-            )
+            loader_kwargs: dict = {
+                "batch_size": batch_size,
+                "shuffle": False,
+                "collate_fn": collate_step_batch,
+                "pin_memory": True,
+            }
+            if num_workers > 0:
+                loader_kwargs.update({
+                    "num_workers": num_workers,
+                    "prefetch_factor": 2,
+                    "persistent_workers": True,
+                })
+            loader = DataLoader(samples, **loader_kwargs)
             total_mse = 0.0
             n_batches = 0
             for batch in loader:

@@ -288,15 +288,24 @@ def main() -> None:
         )
         pbar.update(1)
 
-    # torch.compile speeds up forward passes on x86-64 + CUDA.
-    # On ARM64 (NVIDIA GB10) Triton cannot compile its CUDA utils.
+    # torch.compile speeds up forward passes (x86-64: Triton+CUDA graphs).
+    # On ARM64 (NVIDIA GB10) Triton may be unavailable, so we try compile
+    # with a graceful fallback.  If it succeeds (future PyTorch / custom
+    # Triton build) we get the speedup; if not, we log a warning and
+    # continue in eager mode.
     is_arm64 = hasattr(os, "uname") and os.uname().machine in ("aarch64", "arm64")
-    if device == "cuda" and hasattr(torch, "compile") and not is_arm64:
-        compile_mode = "reduce-overhead"
-        global_model = torch.compile(global_model, mode=compile_mode)
-        print(f"[INFO] model compiled with torch.compile ({compile_mode})")
-    elif device == "cuda" and is_arm64:
-        print("[INFO] Skipping torch.compile (ARM64, Triton unavailable).")
+    if device == "cuda" and hasattr(torch, "compile"):
+        compile_mode = "reduce-overhead" if not is_arm64 else "default"
+        try:
+            global_model = torch.compile(global_model, mode=compile_mode)
+            print(f"[INFO] model compiled with torch.compile ({compile_mode})")
+        except Exception as e:
+            if is_arm64:
+                print(f"[INFO] torch.compile unavailable on ARM64 "
+                      f"({type(e).__name__}), continuing in eager mode")
+            else:
+                print(f"[WARN] torch.compile failed ({type(e).__name__}: {e}), "
+                      f"continuing in eager mode")
 
     # Human-readable training mode summary
     parts = []

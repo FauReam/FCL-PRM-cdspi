@@ -172,7 +172,7 @@ class FederatedSimulator:
 
         self.history: list[dict] = []
 
-    def _eval_per_domain(self, device: str, batch_size: int = 32) -> dict:
+    def _eval_per_domain(self, device: str, batch_size: int = 32, num_workers: int = 0) -> dict:
         """Evaluate global model on each client's local data (per-domain MSE).
 
         Uses the current global model (post-aggregation) to run inference on
@@ -193,12 +193,19 @@ class FederatedSimulator:
         metrics: dict[str, float] = {}
         with torch.inference_mode():
             for client in tqdm(self.clients, desc="[Eval] Per-domain", leave=True):
-                loader = DataLoader(
-                    client.train_data,
-                    batch_size=batch_size,
-                    collate_fn=collate_step_batch,
-                    pin_memory=True,
-                )
+                loader_kwargs: dict = {
+                    "batch_size": batch_size,
+                    "shuffle": False,
+                    "collate_fn": collate_step_batch,
+                    "pin_memory": True,
+                }
+                if num_workers > 0:
+                    loader_kwargs.update({
+                        "num_workers": num_workers,
+                        "prefetch_factor": 2,
+                        "persistent_workers": True,
+                    })
+                loader = DataLoader(client.train_data, **loader_kwargs)
                 total_mse = 0.0
                 num_batches = 0
                 for batch in tqdm(loader, desc=f"Client {client.client_id}", leave=False, total=len(loader)):
@@ -384,7 +391,7 @@ class FederatedSimulator:
             "output_js_divergence": js_div,
         }
 
-    def _eval_ood_cross_domain(self, device: str, batch_size: int) -> dict:
+    def _eval_ood_cross_domain(self, device: str, batch_size: int, num_workers: int = 0) -> dict:
         """Cross-domain OOD evaluation: test each client on all other domains.
 
         Returns per-client OOD MSE, aggregated into a single summary.
@@ -419,10 +426,11 @@ class FederatedSimulator:
             results = evaluate_cross_domain(
                 global_model, tokenizer, ood_splits,
                 device=device, batch_size=batch_size,
+                num_workers=num_workers,
             )
         return results
 
-    def _eval_label_noise(self, device: str, batch_size: int) -> dict:
+    def _eval_label_noise(self, device: str, batch_size: int, num_workers: int = 0) -> dict:
         """Evaluate global model under label perturbation at multiple noise levels."""
         from fclprm.metrics.ood_eval import (
             build_perturbation_test_sets,
@@ -442,6 +450,7 @@ class FederatedSimulator:
             results = evaluate_label_noise_robustness(
                 global_model, test_sets,
                 device=device, batch_size=batch_size,
+                num_workers=num_workers,
             )
         return results
 
@@ -748,7 +757,7 @@ class FederatedSimulator:
 
                 # Per-domain evaluation (post-aggregation global model)
                 if (round_num + 1) % self.eval_every == 0:
-                    per_domain = self._eval_per_domain(device=device, batch_size=local_batch_size)
+                    per_domain = self._eval_per_domain(device=device, batch_size=local_batch_size, num_workers=num_workers)
                     domain_str = " | ".join(
                         f"c{k.split('_')[1]}={v:.4f}" for k, v in sorted(per_domain.items())
                     )
@@ -763,7 +772,8 @@ class FederatedSimulator:
                 ood_results: dict = {}
                 if self.eval_ood and (round_num + 1) % self.eval_every == 0:
                     ood_results = self._eval_ood_cross_domain(
-                        device=device, batch_size=local_batch_size
+                        device=device, batch_size=local_batch_size,
+                        num_workers=num_workers,
                     )
                     if ood_results:
                         tqdm.write(f"  [OOD Cross-domain] {ood_results}")
@@ -772,7 +782,8 @@ class FederatedSimulator:
                 label_noise_results: dict = {}
                 if self.eval_label_noise and (round_num + 1) % self.eval_every == 0:
                     label_noise_results = self._eval_label_noise(
-                        device=device, batch_size=local_batch_size
+                        device=device, batch_size=local_batch_size,
+                        num_workers=num_workers,
                     )
                     if label_noise_results:
                         tqdm.write(f"  [Label Noise] {label_noise_results}")
