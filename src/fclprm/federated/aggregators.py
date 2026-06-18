@@ -49,13 +49,24 @@ def fedavg_prm(
     if weights is None:
         weights = [1.0 / len(client_updates)] * len(client_updates)
 
-    # Initialize aggregated state
-    aggregated_state = copy.deepcopy(raw.state_dict())
+    # Initialize aggregated state on CPU to avoid device mismatch with
+    # client updates (which are always CPU via .cpu() in client.py).
+    # raw.state_dict() may be on GPU if the global model was moved for
+    # eval and not properly restored.
+    raw_sd = raw.state_dict()
+    aggregated_state = {
+        k: v.cpu() if v.device.type != "cpu" else v
+        for k, v in raw_sd.items()
+    }
 
     for param_name in head_param_names:
         aggregated = torch.zeros_like(aggregated_state[param_name])
         for update, weight in zip(client_updates, weights):
-            aggregated += weight * update[param_name]
+            # Ensure client update tensors are on CPU (defensive)
+            client_val = update[param_name]
+            if client_val.device.type != "cpu":
+                client_val = client_val.cpu()
+            aggregated += weight * client_val
         aggregated_state[param_name] = aggregated
 
     raw.load_state_dict(aggregated_state)
@@ -255,13 +266,22 @@ def robust_aggregate_trimmed_mean(
         name for name, param in raw.named_parameters() if param.requires_grad
     ]
 
-    aggregated_state = copy.deepcopy(raw.state_dict())
+    # Defensive: force CPU to avoid device mismatch with client updates
+    raw_sd = raw.state_dict()
+    aggregated_state = {
+        k: v.cpu() if v.device.type != "cpu" else v
+        for k, v in raw_sd.items()
+    }
     n_clients = len(client_updates)
     n_trim = int(n_clients * trim_ratio)
 
     for param_name in head_param_names:
-        # Stack all client values: (n_clients, *param_shape)
-        stacked = torch.stack([update[param_name] for update in client_updates])
+        # Stack all client values on CPU: (n_clients, *param_shape)
+        stacked = torch.stack([
+            update[param_name].cpu() if update[param_name].device.type != "cpu"
+            else update[param_name]
+            for update in client_updates
+        ])
 
         # Flatten, sort, trim, mean, reshape
         original_shape = stacked.shape[1:]
