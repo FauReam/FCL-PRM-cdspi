@@ -87,13 +87,28 @@ class FederatedServer:
 
         return self.global_model
 
+    def _unwrap(self, model: nn.Module) -> nn.Module:
+        """Return the uncompiled model beneath torch.compile's OptimizedModule.
+
+        PyTorch 2.11 OptimizedModule.state_dict() prepends/expects
+        "_orig_mod." on every key.  This helper returns the original
+        module so state_dict ops are transparent.
+        """
+        if hasattr(model, "_orig_mod"):
+            return model._orig_mod
+        return model
+
+    def _raw_model(self) -> nn.Module:
+        """Return the uncompiled global model for state_dict operations."""
+        return self._unwrap(self.global_model)
+
     def broadcast(self) -> dict:
         """Broadcast current global model state to clients.
 
         Returns:
             Global model state dict.
         """
-        return copy.deepcopy(self.global_model.state_dict())
+        return copy.deepcopy(self._raw_model().state_dict())
 
     def get_global_model(self) -> nn.Module:
         """Return the current global model.

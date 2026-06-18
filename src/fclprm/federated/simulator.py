@@ -753,7 +753,7 @@ class FederatedSimulator:
                 # Copy post-aggregation weights into eval model (in-memory,
                 # no disk I/O).  Training models stay on GPU — no ping-pong.
                 self._eval_model.load_state_dict(
-                    self.server.get_global_model().state_dict()
+                    self.server._raw_model().state_dict()
                 )
 
                 # Swap eval model in for per-domain evaluation.

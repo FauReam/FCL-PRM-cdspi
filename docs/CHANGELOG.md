@@ -3,6 +3,14 @@
 > 记录效率优化、算法改进、架构调整、硬件适配类变更。
 > 架构级决策写入 `docs/decisions.md`。
 
+## 2026-06-18
+
+### fix(federated): unwrap OptimizedModule for all state_dict operations
+- **问题**: PyTorch 2.11 `torch.compile` 的 `OptimizedModule.state_dict()` 在所有 key 前添加 `_orig_mod.` 前缀，`load_state_dict()` 也要求带此前缀。
+- **影响**: 编译版 global_model 的 state_dict 加载到未编译的 client model 时崩溃（全参数 FT / LoRA）；编译版 global_model 接受来自未编译 client update 的裸 state_dict 时聚合也可能失败。
+- **修复**: 在 `server.py` 新增 `_unwrap()` / `_raw_model()` 方法，在 `aggregators.py` 新增 `_unwrap()` 辅助函数。所有 state_dict 读/写均通过 `_orig_mod` 解包后的原始模块操作。
+- **影响文件**: `src/fclprm/federated/server.py`, `aggregators.py`, `simulator.py`
+
 ---
 
 ## 2026-06-17 — Eval DataLoader 多进程 + ARM64 compile 尝试

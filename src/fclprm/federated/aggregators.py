@@ -6,6 +6,18 @@ import torch
 import torch.nn as nn
 
 
+def _unwrap(model: nn.Module) -> nn.Module:
+    """Return the uncompiled model beneath torch.compile's OptimizedModule.
+
+    PyTorch 2.11 OptimizedModule.state_dict() prepends/expects
+    "_orig_mod." on every key.  All state_dict ops must go through
+    the raw module to be transparent.
+    """
+    if hasattr(model, "_orig_mod"):
+        return model._orig_mod
+    return model
+
+
 def fedavg_prm(
     global_model: nn.Module,
     client_updates: list[dict],
@@ -27,16 +39,18 @@ def fedavg_prm(
     if not client_updates:
         return global_model
 
+    raw = _unwrap(global_model)
+
     # Get head parameter names (backbone is frozen)
     head_param_names = [
-        name for name, param in global_model.named_parameters() if param.requires_grad
+        name for name, param in raw.named_parameters() if param.requires_grad
     ]
 
     if weights is None:
         weights = [1.0 / len(client_updates)] * len(client_updates)
 
     # Initialize aggregated state
-    aggregated_state = copy.deepcopy(global_model.state_dict())
+    aggregated_state = copy.deepcopy(raw.state_dict())
 
     for param_name in head_param_names:
         aggregated = torch.zeros_like(aggregated_state[param_name])
@@ -44,7 +58,7 @@ def fedavg_prm(
             aggregated += weight * update[param_name]
         aggregated_state[param_name] = aggregated
 
-    global_model.load_state_dict(aggregated_state)
+    raw.load_state_dict(aggregated_state)
     return global_model
 
 
@@ -235,11 +249,13 @@ def robust_aggregate_trimmed_mean(
     if not client_updates:
         return global_model
 
+    raw = _unwrap(global_model)
+
     head_param_names = [
-        name for name, param in global_model.named_parameters() if param.requires_grad
+        name for name, param in raw.named_parameters() if param.requires_grad
     ]
 
-    aggregated_state = copy.deepcopy(global_model.state_dict())
+    aggregated_state = copy.deepcopy(raw.state_dict())
     n_clients = len(client_updates)
     n_trim = int(n_clients * trim_ratio)
 
@@ -260,5 +276,5 @@ def robust_aggregate_trimmed_mean(
         mean_trimmed = trimmed.mean(dim=0)
         aggregated_state[param_name] = mean_trimmed.view(original_shape)
 
-    global_model.load_state_dict(aggregated_state)
+    raw.load_state_dict(aggregated_state)
     return global_model
