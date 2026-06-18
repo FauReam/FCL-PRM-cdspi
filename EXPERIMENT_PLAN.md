@@ -215,7 +215,8 @@ Phase 2: 补充实验 ─── 消融 + 交叉验证 + OOD
 | **F2** | LoRA(r=64) 达 full FT 98%+ 且 CD-SPI 为噪声 | 论文转向 CD-SPI 纯诊断工具，不再宣称容量优势 |
 | **F5** | 集中式 head-only vs full FT 差距 ≤ 2% | 联邦特异性 claim 降级 |
 | **F4** | CKA/JS 与 CD-SPI 排序不一致 | CD-SPI 降级为辅助指标 |
-| **整体** | Phase 0 全 9 点 CD-SPI 无单调趋势 | 论文转为"CD-SPI 揭示联邦 PRM 聚合无容量依赖" |
+| **整体** | Phase 0 全 9 点 CD-SPI 无单调趋势 | 论文转为"CD-SPI 揭示联邦 PRM 聚合无容量依赖" → **[Plan N](#plan-n-全容量谱-null-result-执行预案)** |
+| **F0** | 全容量谱 CD-SPI sym 一致 ≈ 0.001（full FT = head-only） | **[Plan N](#plan-n-全容量谱-null-result-执行预案)**：Null Result 叙事，顶刊硬通货 |
 
 ---
 
@@ -244,11 +245,75 @@ Phase 2: 补充实验 ─── 消融 + 交叉验证 + OOD
 
 ---
 
+## Plan N：全容量谱 Null Result 执行预案
+
+> **触发**：Phase 0 全 9 配置 CD-SPI sym 一致 ≈ 0.001–0.002，full FT 与 head-only 无差异。
+> **本质**：容量不放大客户端表征发散。这不是失败——这是更值钱的发现。
+
+### 为什么 Null Result 更强
+
+| 阳性 | Null |
+|:---|:---|
+| "容量越大 drift 越大"（直觉） | "容量不影响 drift"（反直觉） |
+| 谁先做谁发 | **谁先系统证明 null 谁定义基线** |
+| CD-SPI 作为发散度量 | CD-SPI 作为证伪工具 |
+| 实践："用 full FT" | 实践："**head-only 就够了**" |
+
+### F0 触发后立即执行的 4 步
+
+**Step 1 — 预注册等价性边界（跑完 Phase 0 当天）**
+```
+在 arXiv 预印本 / project page 上声明：
+"若全容量谱 CD-SPI sym < 0.01 且 TOST 等价性检验显著，
+ 则接受 null hypothesis：Pythia-1.4B 联邦 PRM 训练中，
+ 客户端表征发散不依赖可训练容量。"
+```
+这防止审稿人说"你们看到 null 之后才改假说"。
+
+**Step 2 — 三方交叉验证（1 天计算）**
+- CKA（已观测 1.0）：特征空间一致性
+- JS 散度：函数空间一致性
+- 等价性检验 (TOST)：统计证明"无差异"而非"未检测到差异"
+
+**Step 3 — 正控制实验（~1 天）**
+- 合成已知 ground truth 发散的数据
+- 验证 CD-SPI 在该数据上正确检测到信号
+- → 证明工具本身有效，不是灵敏度不够
+
+**Step 4 — 论文叙事重构（~1 周）**
+- 标题方向：*"Where Client Drift Should Be But Isn't"*
+- 核心图：CD-SPI sym 容量平线图 + TOST 等价性边界 + 正控制对比
+- 攻击面预防御：§6-B 全部事项（见 PROJECT_FRAMEWORK.md）
+
+### F0 触发后砍掉的实验
+
+| 砍掉 | 理由 |
+|:---|:---|
+| Phase 1 续跑 25 轮（全部） | null result 不需要深度轮次——信号已在 5 轮内稳定 |
+| Phase 2 OOD + 异质性消融 | 留给 rebuttal / follow-up |
+| 架构消融 full set (Identity) | GELU+ReLU 两者一致已足够 |
+
+**F0 触发后从触发到投稿的时间线：~2 周**（vs 阳性叙事 ~10 周）
+
+### 当前观测 (2026-06-18)
+
+| 配置 | CD-SPI sym | 状态 |
+|:---|:---|:---|
+| M3 head-only GELU 10r | 0.0011 | ✅ |
+| M3 head-only ReLU 2r | 0.0011 | ✅ |
+| Feasibility full FT 2r | 0.0016 | ✅ |
+| M2 centralized | — | 🔄 运行中 |
+| 中间容量点 (LoRA/partial) | — | ⏳ 待跑 |
+
+> **趋势**：两个端点 + 两个激活函数 的 CD-SPI sym 一致在 0.001–0.002。如果接下来的 LoRA r=256 和 full FT 联邦也在这个量级，F0 触发基本确认。
+
+---
+
 ## 当前状态
 
 | 项目 | 值 |
 |:---|:---|
-| 当前运行 | `m3_fedavg_head_1.4b_gelu.yaml --rounds 10` |
-| 启动时间 | 2026-06-16 02:23 |
-| 预计完成 | 2026-06-16 ~18:00 (10 轮) |
-| 下一步 | `m3_fedavg_head_1.4b.yaml` (ReLU), 5 rounds |
+| 当前运行 | `m2_centralized_full_1.4b.yaml` (Epoch 2/3) |
+| 启动时间 | 2026-06-18 16:38 |
+| 预计完成 | 2026-06-18 ~22:00 |
+| 下一步 | M3 full FT 联邦 2r 快速验证 F0 |

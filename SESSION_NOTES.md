@@ -2,6 +2,8 @@
 
 > 从实际调试中积累的关键信息。新 session 读此文件可跳过踩坑。
 
+> **⚠️ F0 预案激活中**：CD-SPI sym 观测值 0.0011–0.0016（全端点一致）。若全容量谱复现 → Plan N（Null Result 叙事，详见 PROJECT_FRAMEWORK.md §六-B 和 EXPERIMENT_PLAN.md §Plan N）。不要当失败处理——这是更强的结果。
+
 ## 硬件
 
 | 项目 | 值 |
