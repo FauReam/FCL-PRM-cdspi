@@ -1,15 +1,19 @@
 # FCL-PRM — Claude Code 项目上下文
 
-> **新会话必读**：[SESSION_NOTES.md](SESSION_NOTES.md) — 硬件限制、已知 Bug、数据统计、性能权衡、配置速查
+> **新会话必读**：
+> - [DIRECTION.md](DIRECTION.md) — **方向待重新确认（2026-06-18）**
+> - [SESSION_NOTES.md](SESSION_NOTES.md) — 硬件限制、已知 Bug、数据统计、性能权衡、配置速查
 
 ## 项目简介
-Federated Continual Process Reward Model (联邦持续过程奖励模型)。
-跨机构联邦学习协同训练 step-level PRM。**当前方向：CD-SPI 发散结构诊断框架**（详见 PROJECT_FRAMEWORK.md）：
+Federated Process Reward Model (联邦过程奖励模型)。
+跨机构联邦学习协同训练 step-level PRM。
 
-- **核心贡献**：CD-SPI 诊断框架，区分联邦聚合中的噪声型与信号型发散
-- **容量作为实验变量**：head-only / LoRA / partial FT / full FT 仅是操控发散类型的手段
-- 容量叙事（"full FT 更好"）已根据两次 expert panel 结论——**全体专家一致否决作为核心贡献**
-- 设备：NVIDIA GB10，121GB 统一内存，ARM64 CPU
+> ⚠️ **旧 CD-SPI 诊断框架已于 2026-06-18 被实验证伪**（全配置 CD-SPI sym ≈ 0.001）。
+> 当前方向重定向中。新方向聚焦：**参数容量限制为何改变发散性质（信号→噪声），及其对聚合质量的因果影响**。
+> 详见 [DIRECTION.md](DIRECTION.md)。
+
+- 设备：NVIDIA DGX Spark GB10，121GB 统一内存，ARM64 CPU
+- 计划换 Pythia-70M + PRM800K + Med-PRM 数据
 
 ## Scope boundary（明确声明）
 本文因果推断限于 **dense backbone (Pythia 系列) + FedAvg 聚合 + 标准异质性设定**。
