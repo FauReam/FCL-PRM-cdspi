@@ -19,8 +19,9 @@ venv/
 .idea/
 *.swp
 
-# Claude Code local config
-.claude/
+# Claude Code local config (skills are tracked)
+.claude/settings.json
+.claude/commands/
 
 # OS
 .DS_Store
